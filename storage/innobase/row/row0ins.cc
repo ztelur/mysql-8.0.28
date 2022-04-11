@@ -2365,6 +2365,7 @@ static void row_ins_temp_prebuilt_tree_modified(dict_table_t *table) {
  @retval DB_LOCK_WAIT on lock wait when !(flags & BTR_NO_LOCKING_FLAG)
  @retval DB_FAIL if retry with BTR_MODIFY_TREE is needed
  @return error code */
+ // row_ins_clust_index_entry_low 和 row_ins_sec_index_entry_low 函数结构类似，只分析插入聚集索引
 dberr_t row_ins_clust_index_entry_low(
     uint32_t flags,      /*!< in: undo logging and locking flags */
     ulint mode,          /*!< in: BTR_MODIFY_LEAF or BTR_MODIFY_TREE,
@@ -3089,6 +3090,7 @@ func_exit:
  to a delete marked record, performs the insert by updating or delete
  unmarking the delete marked record.
  @return DB_SUCCESS, DB_LOCK_WAIT, DB_DUPLICATE_KEY, or some other error code */
+ // 插入一个entry 到聚簇索引中
 dberr_t row_ins_clust_index_entry(
     dict_index_t *index, /*!< in: clustered index */
     dtuple_t *entry,     /*!< in/out: index entry to insert */
@@ -3115,6 +3117,7 @@ and return. don't execute actual insert. */
   uint32_t flags;
 
   if (!index->table->is_intrinsic()) {
+    // flush log，make checkpoint（如果需要
     log_free_check();
     flags = index->table->is_temporary() ? BTR_NO_LOCKING_FLAG : 0;
 
@@ -3136,6 +3139,7 @@ and return. don't execute actual insert. */
     }
     err = row_ins_sorted_clust_index_entry(BTR_MODIFY_LEAF, index, entry, thr);
   } else {
+    // 先尝试乐观插入，修改叶子节点 BTR_MODIFY_LEAF
     err = row_ins_clust_index_entry_low(flags, BTR_MODIFY_LEAF, index, n_uniq,
                                         entry, thr, dup_chk_only);
   }
@@ -3161,6 +3165,7 @@ and return. don't execute actual insert. */
   if (index->table->is_intrinsic() && dict_index_is_auto_gen_clust(index)) {
     err = row_ins_sorted_clust_index_entry(BTR_MODIFY_TREE, index, entry, thr);
   } else {
+    // 乐观插入失败，尝试悲观插入 BTR_MODIFY_TREE
     err = row_ins_clust_index_entry_low(flags, BTR_MODIFY_TREE, index, n_uniq,
                                         entry, thr, dup_chk_only);
   }
@@ -3318,6 +3323,7 @@ record.
                                 can help to see which case it is
 @param[in]	thr		query thread
 @return DB_SUCCESS, DB_LOCK_WAIT, DB_DUPLICATE_KEY, or some other error code */
+// 将一个索引项插入到索引中
 static dberr_t row_ins_index_entry(dict_index_t *index, dtuple_t *entry,
                                    uint32_t &multi_val_pos, que_thr_t *thr) {
   ut_ad(thr_get_trx(thr)->id != 0);
@@ -3328,11 +3334,13 @@ static dberr_t row_ins_index_entry(dict_index_t *index, dtuple_t *entry,
   });
 
   if (index->is_clustered()) {
+    // 插入聚集索引
     return (row_ins_clust_index_entry(index, entry, thr, false));
   } else if (index->is_multi_value()) {
     return (
         row_ins_sec_index_multi_value_entry(index, entry, multi_val_pos, thr));
   } else {
+    // 插入二级索引
     return (row_ins_sec_index_entry(index, entry, thr, false));
   }
 }
@@ -3446,6 +3454,7 @@ dberr_t row_ins_index_entry_set_vals(const dict_index_t *index, dtuple_t *entry,
 /** Inserts a single index entry to the table.
  @return DB_SUCCESS if operation successfully completed, else error
  code or DB_LOCK_WAIT */
+ // 插入一个单独的索引项到 table 中
 [[nodiscard]] static dberr_t row_ins_index_entry_step(
     ins_node_t *node, /*!< in: row insert node */
     que_thr_t *thr)   /*!< in: query thread */
@@ -3455,7 +3464,7 @@ dberr_t row_ins_index_entry_set_vals(const dict_index_t *index, dtuple_t *entry,
   DBUG_TRACE;
 
   ut_ad(dtuple_check_typed(node->row));
-
+  // 给索引项赋值
   err = row_ins_index_entry_set_vals(node->index, node->entry, node->row);
 
   if (err != DB_SUCCESS) {
@@ -3463,7 +3472,7 @@ dberr_t row_ins_index_entry_set_vals(const dict_index_t *index, dtuple_t *entry,
   }
 
   ut_ad(dtuple_check_typed(node->entry));
-
+  // 插入索引项
   err = row_ins_index_entry(node->index, node->entry, node->ins_multi_val_pos,
                             thr);
 
@@ -3553,6 +3562,7 @@ static inline void row_ins_get_row_from_query_block(
 /** Inserts a row to a table.
  @return DB_SUCCESS if operation successfully completed, else error
  code or DB_LOCK_WAIT */
+ // 将一行数据插入一张表中
 [[nodiscard]] static dberr_t row_ins(
     ins_node_t *node, /*!< in: row insert node */
     que_thr_t *thr)   /*!< in: query thread */
@@ -3562,10 +3572,11 @@ static inline void row_ins_get_row_from_query_block(
   DBUG_TRACE;
 
   DBUG_PRINT("row_ins", ("table: %s", node->table->name.m_name));
-
+  //
   if (node->state == INS_NODE_ALLOC_ROW_ID) {
+    // 若innodb表没有主键和唯一键，用row_id组织索引
     row_ins_alloc_row_id_step(node);
-
+    // 获取row_id的索引
     node->index = node->table->first_index();
     node->entry = UT_LIST_GET_FIRST(node->entry_list);
 
@@ -3580,9 +3591,10 @@ static inline void row_ins_get_row_from_query_block(
   }
 
   ut_ad(node->state == INS_NODE_INSERT_ENTRIES);
-
+  // 遍历所有索引，向每个索引中插入记录
   while (node->index != nullptr) {
     if (node->index->type != DICT_FTS) {
+      // 向索引中插入记录
       err = row_ins_index_entry_step(node, thr);
 
       switch (err) {
@@ -3596,7 +3608,7 @@ static inline void row_ins_get_row_from_query_block(
           return err;
       }
     }
-
+    // 获取下一个索引
     node->index = node->index->next();
     node->entry = UT_LIST_GET_NEXT(tuple_list, node->entry);
 
@@ -3673,7 +3685,7 @@ que_thr_t *row_ins_step(que_thr_t *thr) /*!< in: query thread */
 
       goto same_trx;
     }
-
+    // 给表加IX锁
     err = lock_table(0, node->table, LOCK_IX, thr);
 
     DBUG_EXECUTE_IF("ib_row_ins_ix_lock_wait", err = DB_LOCK_WAIT;);
@@ -3706,7 +3718,7 @@ que_thr_t *row_ins_step(que_thr_t *thr) /*!< in: query thread */
   }
 
   /* DO THE CHECKS OF THE CONSISTENCY CONSTRAINTS HERE */
-
+  // 插入记录
   err = row_ins(node, thr);
 
 error_handling:

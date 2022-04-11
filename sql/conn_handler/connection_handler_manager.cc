@@ -247,15 +247,22 @@ bool Connection_handler_manager::unload_connection_handler() {
   return false;
 }
 
+// 处理新的client端连接
 void Connection_handler_manager::process_new_connection(
     Channel_info *channel_info) {
+  // 如果超出上限，或者错误就直接返回 error 检查 max_connections
   if (connection_events_loop_aborted() ||
       !check_and_incr_conn_count(channel_info->is_admin_connection())) {
     channel_info->send_error_and_close_channel(ER_CON_COUNT_ERROR, 0, true);
     delete channel_info;
     return;
   }
-
+  /*
+        Connection_handler 有两个子类，
+        Per_thread_connection_handler：一个连接一个线程
+        One_thread_connection_handler：一个线程处理所有连接
+        我们一般使用 Per_thread_connection_handler
+      */
   if (m_connection_handler->add_connection(channel_info)) {
     inc_aborted_connects();
     delete channel_info;

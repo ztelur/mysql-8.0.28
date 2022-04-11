@@ -8824,7 +8824,7 @@ void innobase_get_multi_value(const TABLE *mysql_table, ulint f_idx,
 /** Stores a row in an InnoDB database, to the table specified in this
  handle.
  @return error code */
-
+// innodb 的写入的接口
 int ha_innobase::write_row(uchar *record) /*!< in: a row in MySQL format */
 {
   dberr_t error;
@@ -8917,6 +8917,7 @@ int ha_innobase::write_row(uchar *record) /*!< in: a row in MySQL format */
   }
 
   /* Execute insert graph that will result in actual insert. */
+  // 存储引擎层面真正执行插入操作
   error = row_insert_for_mysql((byte *)record, m_prebuilt);
 
   DEBUG_SYNC(m_user_thd, "ib_after_row_insert");

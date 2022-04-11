@@ -1227,7 +1227,7 @@ void bind_fields(Item *first) {
   @retval
     1  request of thread shutdown (see dispatch_command() description)
 */
-
+// 处理 tcp connection 解析过来的 sql 请求
 bool do_command(THD *thd) {
   bool return_value;
   int rc;
@@ -1294,6 +1294,7 @@ bool do_command(THD *thd) {
       See init_net_server_extension()
     */
     thd->m_server_idle = true;
+    // 读取数据包，获取sql命令
     rc = thd->get_protocol()->get_command(&com_data, &command);
     thd->m_server_idle = false;
   }
@@ -1348,7 +1349,7 @@ bool do_command(THD *thd) {
   my_net_set_read_timeout(net, thd->variables.net_read_timeout);
 
   DEBUG_SYNC(thd, "before_command_dispatch");
-
+  // 分发命令
   return_value = dispatch_command(thd, &com_data, command);
   thd->get_protocol_classic()->get_output_packet()->shrink(
       thd->variables.net_buffer_length);
@@ -1711,7 +1712,7 @@ bool dispatch_command(THD *thd, const COM_DATA *com_data,
                          Command_names::str_global(command).c_str())) {
     goto done;
   }
-
+  // 处理 command 的 switch case，select 进入的就是 COM_QUERY
   switch (command) {
     case COM_INIT_DB: {
       LEX_STRING tmp;
@@ -1891,11 +1892,12 @@ bool dispatch_command(THD *thd, const COM_DATA *com_data,
         mysqld_stmt_reset(thd, stmt);
       break;
     }
+      // select 相关的语句
     case COM_QUERY: {
       assert(thd->m_digest == nullptr);
       thd->m_digest = &thd->m_digest_state;
       thd->m_digest->reset(thd->m_token_array, max_digest_length);
-
+      // 复制线程的查询语句
       if (alloc_query(thd, com_data->com_query.query,
                       com_data->com_query.length))
         break;  // fatal error is set
@@ -1913,7 +1915,7 @@ bool dispatch_command(THD *thd, const COM_DATA *com_data,
 #endif
 
       const LEX_CSTRING orig_query = thd->query();
-
+      //
       Parser_state parser_state;
       if (parser_state.init(thd, thd->query().str, thd->query().length)) break;
 
@@ -1934,7 +1936,7 @@ bool dispatch_command(THD *thd, const COM_DATA *com_data,
 
       copy_bind_parameter_values(thd, com_data->com_query.parameters,
                                  com_data->com_query.parameter_count);
-
+      // 分发 sql command，解析 sql 获取 AST 树
       dispatch_sql_command(thd, &parser_state);
 
       // Check if the statement failed and needs to be restarted in
@@ -2810,7 +2812,7 @@ static inline void binlog_gtid_end_transaction(THD *thd) {
   @retval false       OK
   @retval true        Error
 */
-
+// 执行存储在 Thd 或者 lex -> sql_command 的数据
 int mysql_execute_command(THD *thd, bool first_level) {
   int res = false;
   LEX *const lex = thd->lex;
@@ -3232,7 +3234,7 @@ int mysql_execute_command(THD *thd, bool first_level) {
     test for LOCK TABLE etc. first. To rephrase, we try not to set TX_STMT_DML
     until we have the MDL, and LOCK TABLE could massively delay this.
   */
-
+  // 使用 swtich 来处理
   switch (lex->sql_command) {
     case SQLCOM_PREPARE: {
       mysql_sql_stmt_prepare(thd);
@@ -3550,6 +3552,7 @@ int mysql_execute_command(THD *thd, bool first_level) {
     case SQLCOM_LOAD: {
       assert(first_table == all_tables && first_table != nullptr);
       assert(lex->m_sql_cmd != nullptr);
+      // 会进行执行
       res = lex->m_sql_cmd->execute(thd);
       break;
     }
@@ -4539,6 +4542,7 @@ int mysql_execute_command(THD *thd, bool first_level) {
     case SQLCOM_RESTART_SERVER:
     case SQLCOM_CREATE_SRS:
     case SQLCOM_DROP_SRS: {
+      //
       assert(lex->m_sql_cmd != nullptr);
 
       res = lex->m_sql_cmd->execute(thd);
@@ -5042,7 +5046,7 @@ void THD::reset_for_next_command() {
   @param thd          Current session.
   @param parser_state Parser state.
 */
-
+// 将 sql 从 文本 string 解析出来，并且将结果 AST 发送给查询执行器
 void dispatch_sql_command(THD *thd, Parser_state *parser_state) {
   DBUG_TRACE;
   DBUG_PRINT("dispatch_sql_command", ("query: '%s'", thd->query().str));
@@ -5067,6 +5071,7 @@ void dispatch_sql_command(THD *thd, Parser_state *parser_state) {
   bool err = thd->get_stmt_da()->is_error();
 
   if (!err) {
+    // 解析 sql
     err = parse_sql(thd, parser_state, nullptr);
     if (!err) err = invoke_post_parse_rewrite_plugins(thd, false);
 
@@ -5170,7 +5175,7 @@ void dispatch_sql_command(THD *thd, Parser_state *parser_state) {
           auto mgr_ptr = resourcegroups::Resource_group_mgr::instance();
           bool switched = mgr_ptr->switch_resource_group_if_needed(
               thd, &src_res_grp, &dest_res_grp, &ticket, &cur_ticket);
-
+          // 执行 sql
           error = mysql_execute_command(thd, true);
 
           if (switched)

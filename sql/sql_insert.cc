@@ -420,6 +420,7 @@ static bool mysql_prepare_blob_values(THD *thd,
   return false;
 }
 
+// 提前进行权限检查
 bool Sql_cmd_insert_base::precheck(THD *thd) {
   DBUG_TRACE;
   /*
@@ -468,7 +469,7 @@ bool Sql_cmd_insert_base::check_privileges(THD *thd) {
 
   @returns false if success, true if error
 */
-
+// 真正的插入语句
 bool Sql_cmd_insert_values::execute_inner(THD *thd) {
   DBUG_TRACE;
 
@@ -581,7 +582,7 @@ bool Sql_cmd_insert_values::execute_inner(THD *thd) {
     for (Field **next_field = insert_table->field; *next_field; ++next_field) {
       (*next_field)->reset_warnings();
     }
-
+    // 对于每个数据值
     for (const List_item *values : insert_many_values) {
       Autoinc_field_has_explicit_non_null_value_reset_guard after_each_row(
           insert_table);
@@ -631,7 +632,7 @@ bool Sql_cmd_insert_values::execute_inner(THD *thd) {
         // continue when IGNORE clause is used.
         continue;
       }
-
+      // 真正进行写入
       if (write_record(thd, insert_table, &info, &update)) {
         has_error = true;
         break;
@@ -705,6 +706,7 @@ bool Sql_cmd_insert_values::execute_inner(THD *thd) {
         routines did not result in any error due to the KILLED.  In
         such case the flag is ignored for constructing binlog event.
         */
+        // 写入 binlog
         if (thd->binlog_query(THD::ROW_QUERY_TYPE, thd->query().str,
                               thd->query().length, transactional_table, false,
                               false, errcode))
@@ -765,6 +767,7 @@ bool Sql_cmd_insert_values::execute_inner(THD *thd) {
       snprintf(buff, sizeof(buff), ER_THD(thd, ER_INSERT_INFO),
                (long)info.stats.records, (long)(info.stats.deleted + updated),
                (long)thd->get_stmt_da()->current_statement_cond_count());
+    // ok报文，ok报文中包含影响行数
     my_ok(thd, info.stats.copied + info.stats.deleted + updated, id, buff);
   }
 
@@ -1771,8 +1774,8 @@ static bool last_uniq_key(TABLE *table, uint keynr) {
   @param table  table to which record should be written
   @param info   COPY_INFO structure describing handling of duplicates and
                 which is used for counting number of records inserted and
-                deleted.
-  @param update COPY_INFO structure describing the UPDATE part
+                deleted. *info 用来处理唯一键冲突，记录影响行数
+  @param update COPY_INFO structure describing the UPDATE part *update 处理 INSERT ON DUPLICATE KEY UPDATE 相关信息
                 (only used for INSERT ON DUPLICATE KEY UPDATE)
 
   Once this record is written to the table buffer, any AFTER INSERT trigger
@@ -1790,7 +1793,7 @@ static bool last_uniq_key(TABLE *table, uint keynr) {
 
   @returns false if success, true if error
 */
-
+// 进行写入的逻辑
 bool write_record(THD *thd, TABLE *table, COPY_INFO *info, COPY_INFO *update) {
   int error, trg_error = 0;
   char *key = nullptr;
@@ -1810,9 +1813,10 @@ bool write_record(THD *thd, TABLE *table, COPY_INFO *info, COPY_INFO *update) {
   save_write_set = table->write_set;
 
   const enum_duplicates duplicate_handling = info->get_duplicate_handling();
-
+  // 处理 INSERT ON DUPLICATE KEY UPDATE 等复杂情况
   if (duplicate_handling == DUP_REPLACE || duplicate_handling == DUP_UPDATE) {
     assert(duplicate_handling != DUP_UPDATE || update != nullptr);
+    // 调用存储引擎的接口
     while ((error = table->file->ha_write_row(table->record[0]))) {
       uint key_nr;
       /*
@@ -2163,6 +2167,7 @@ bool write_record(THD *thd, TABLE *table, COPY_INFO *info, COPY_INFO *update) {
     if (table->read_set != save_read_set || table->write_set != save_write_set)
       table->column_bitmaps_set(save_read_set, save_write_set);
   } else if ((error = table->file->ha_write_row(table->record[0]))) {
+    // 直接调用存储引擎相关的接口
     DEBUG_SYNC(thd, "write_row_noreplace");
     info->last_errno = error;
     myf error_flags = MYF(0);

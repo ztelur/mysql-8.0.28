@@ -7918,8 +7918,11 @@ int handler::ha_reset() {
   return retval;
 }
 
+// handler 是各个存储引擎的基类，这里我们使用InnoDB引擎
+// 存储引擎
 int handler::ha_write_row(uchar *buf) {
   int error;
+  // 指定log_event类型
   Log_func *log_func = Write_rows_log_event::binlog_row_logging_function;
   assert(table_share->tmp_table != NO_TMP_TABLE || m_lock_type == F_WRLCK);
 

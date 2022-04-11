@@ -1560,7 +1560,7 @@ static dberr_t row_insert_for_mysql_using_ins_graph(const byte *mysql_rec,
 
   row_get_prebuilt_insert_row(prebuilt);
   node = prebuilt->ins_node;
-
+  // 记录格式从MySQL转换成InnoDB
   row_mysql_convert_row_to_innobase(node->row, prebuilt, mysql_rec, &blob_heap);
 
   savept = trx_savept_take(trx);
@@ -1579,7 +1579,7 @@ static dberr_t row_insert_for_mysql_using_ins_graph(const byte *mysql_rec,
 run_again:
   thr->run_node = node;
   thr->prev_node = node;
-
+  // 插入记录
   row_ins_step(thr);
 
   DEBUG_SYNC_C("ib_after_row_insert_step");
@@ -1707,6 +1707,7 @@ dberr_t row_insert_for_mysql(const byte *mysql_rec, row_prebuilt_t *prebuilt) {
   /* For intrinsic tables there a lot of restrictions that can be
   relaxed including locking of table, transaction handling, etc.
   Use direct cursor interface for inserting to intrinsic tables. */
+  // 根据不同的编译选项，执行不同的逻辑
   if (prebuilt->table->is_intrinsic()) {
     return (row_insert_for_mysql_using_cursor(mysql_rec, prebuilt));
   } else {

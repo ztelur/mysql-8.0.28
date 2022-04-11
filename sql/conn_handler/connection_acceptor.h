@@ -56,10 +56,12 @@ class Connection_acceptor {
 
   /**
     Connection acceptor loop to accept connections from clients.
+    监听网络请求，接收来自客户端的 accept 请求
   */
   void connection_event_loop() {
     Connection_handler_manager *mgr =
         Connection_handler_manager::get_instance();
+    // 无限循环
     while (!connection_events_loop_aborted()) {
       Channel_info *channel_info = m_listener->listen_for_connection_event();
       if (channel_info != nullptr) mgr->process_new_connection(channel_info);

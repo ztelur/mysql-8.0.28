@@ -242,6 +242,7 @@ static THD *init_new_thd(Channel_info *channel_info) {
 */
 
 extern "C" {
+// 处理 tcp connection
 static void *handle_connection(void *arg) {
   Global_THD_manager *thd_manager = Global_THD_manager::get_instance();
   Connection_handler_manager *handler_manager =
@@ -260,6 +261,7 @@ static void *handle_connection(void *arg) {
   }
 
   for (;;) {
+    // 新生产一个 THD
     THD *thd = init_new_thd(channel_info);
     if (thd == nullptr) {
       connection_errors_internal++;
@@ -294,10 +296,11 @@ static void *handle_connection(void *arg) {
     MYSQL_SOCKET socket = thd->get_protocol_classic()->get_vio()->mysql_socket;
     mysql_socket_set_thread_owner(socket);
     thd_manager->add_thd(thd);
-
+    // 第一次循环执行prepare，后面跳过，进行 login 和权限校验工作 权限认证
     if (thd_prepare_connection(thd))
       handler_manager->inc_aborted_connects();
     else {
+      // 第二次循环开始，执行do_command 调用 do_command 来处理 command
       while (thd_connection_alive(thd)) {
         if (do_command(thd)) break;
       }
@@ -327,7 +330,7 @@ static void *handle_connection(void *arg) {
 
     // Server is shutting down so end the pthread.
     if (connection_events_loop_aborted()) break;
-
+    // 进入 thread cache，等待新连接复用
     channel_info = Per_thread_connection_handler::block_until_new_connection();
     if (channel_info == nullptr) break;
     pthread_reused = true;
@@ -390,7 +393,7 @@ bool Per_thread_connection_handler::check_idle_thread_and_enqueue_connection(
 
   return res;
 }
-
+// 处理新增 tcp 连接的场景
 bool Per_thread_connection_handler::add_connection(Channel_info *channel_info) {
   int error = 0;
   my_thread_handle id;
@@ -399,7 +402,7 @@ bool Per_thread_connection_handler::add_connection(Channel_info *channel_info) {
 
   // Simulate thread creation for test case before we check thread cache
   DBUG_EXECUTE_IF("fail_thread_create", error = 1; goto handle_error;);
-
+  // 查看 thread_cache 中是否有空闲thread，如有，使用cached thread
   if (!check_idle_thread_and_enqueue_connection(channel_info)) return false;
 
   /*
@@ -407,6 +410,9 @@ bool Per_thread_connection_handler::add_connection(Channel_info *channel_info) {
     connection. Create a new thread to handle the connection
   */
   channel_info->set_prior_thr_create_utime();
+  // 创建对应的 mysql thread 来处理这个 connection，注意这里传入了 handle_connection这个函数，所以会在新创建的
+  // 线程中执行该函数
+  // 建立新线程，从 handle_connection 开始执行
   error =
       mysql_thread_create(key_thread_one_connection, &id, &connection_attrib,
                           handle_connection, (void *)channel_info);

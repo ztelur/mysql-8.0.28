@@ -1336,12 +1336,13 @@ const Listen_socket *Mysqld_socket_listener::get_listen_socket() const {
   return nullptr;
   ;
 }
-
+// socekt 类型 connection 的监听操作
 Channel_info *Mysqld_socket_listener::listen_for_connection_event() {
 #ifdef HAVE_POLL
   int retval = poll(&m_poll_info.m_fds[0], m_socket_vector.size(), -1);
 #else
   m_select_info.m_read_fds = m_select_info.m_client_fds;
+  // poll 监听socket文件，没有新连接时，线程在这里等待
   int retval = select((int)m_select_info.m_max_used_connection,
                       &m_select_info.m_read_fds, 0, 0, 0);
 #endif
@@ -1428,6 +1429,7 @@ Channel_info *Mysqld_socket_listener::listen_for_connection_event() {
     static_cast<Channel_info_tcpip_socket *>(channel_info)
         ->set_network_namespace(network_namespace_for_listening_socket);
 #endif
+  // 返回新连接的信息
   return channel_info;
 }
 

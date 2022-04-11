@@ -481,7 +481,7 @@ bool Sql_cmd_select::prepare_inner(THD *thd) {
 
   return false;
 }
-
+// select 语句最终会调用到该位置，从而进行具体语句的执行
 bool Sql_cmd_dml::execute(THD *thd) {
   DBUG_TRACE;
 
@@ -523,7 +523,7 @@ bool Sql_cmd_dml::execute(THD *thd) {
       error_handler_active = true;
     }
   }
-
+  // 调用 prepare 进行检查
   if (!is_prepared()) {
     if (prepare(thd)) goto err;
   } else {
@@ -573,11 +573,13 @@ bool Sql_cmd_dml::execute(THD *thd) {
     partitions. As a consequence, in such a case, prepare stage can rely only
     on metadata about tables used and not data from them.
   */
+  // 锁定表
   if (!is_empty_query()) {
     if (lock_tables(thd, lex->query_tables, lex->table_count, 0)) goto err;
   }
 
   // Perform statement-specific execution
+  // 真正进行执行阶段
   if (execute_inner(thd)) goto err;
 
   // Count the number of statements offloaded to a secondary storage engine.
@@ -762,7 +764,7 @@ bool optimize_secondary_engine(THD *thd) {
 
 bool Sql_cmd_dml::execute_inner(THD *thd) {
   Query_expression *unit = lex->unit;
-
+  // 进行查询优化 optimize
   if (unit->optimize(thd, /*materialize_destination=*/nullptr,
                      /*create_iterators=*/true, /*finalize_access_paths=*/true))
     return true;
@@ -866,6 +868,7 @@ static bool check_locking_clause_access(THD *thd, Global_tables_list tables) {
 
   This function will check that we have some privileges to all involved tables
   of the query (and possibly to other entities).
+  // 进行提前检查，看看是否有权限
 */
 
 bool Sql_cmd_select::precheck(THD *thd) {
