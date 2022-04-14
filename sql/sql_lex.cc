@@ -1288,7 +1288,7 @@ static bool consume_comment(Lex_input_stream *lip,
 
   - MY_LEX_END			Found end of query
 */
-
+// 词法解析的入口
 int MYSQLlex(YYSTYPE *yacc_yylval, YYLTYPE *yylloc, THD *thd) {
   auto *yylval = reinterpret_cast<Lexer_yystype *>(yacc_yylval);
   Lex_input_stream *lip = &thd->m_parser_state->m_lip;

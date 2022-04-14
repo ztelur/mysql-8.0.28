@@ -108,16 +108,20 @@ enum page_cleaner_state_t {
   PAGE_CLEANER_STATE_NONE = 0,
   /** Requested but not started flushing.
   Moved from NONE by the coordinator. */
+  // 已经发起了刷脏请求
   PAGE_CLEANER_STATE_REQUESTED,
   /** Flushing is on going.
   Moved from REQUESTED by the worker. */
+  // 是否正在刷脏
   PAGE_CLEANER_STATE_FLUSHING,
   /** Flushing was finished.
   Moved from FLUSHING by the worker. */
+  // 这轮的刷脏处理是否已经完成
   PAGE_CLEANER_STATE_FINISHED
 };
 
 /** Page cleaner request state for each buffer pool instance */
+// 记录对缓冲池刷脏状态的记录，这个slot表示的缓冲池实例是否已经发起了刷脏请求
 struct page_cleaner_slot_t {
   page_cleaner_state_t state; /*!< state of the request.
                               protected by page_cleaner_t::mutex
@@ -126,6 +130,18 @@ struct page_cleaner_slot_t {
                               n_flushed_lru and n_flushed_list can be
                               updated only by the worker thread */
   /* This value is set during state==PAGE_CLEANER_STATE_NONE */
+  // 记录次轮刷脏要对这个缓冲池实例刷脏的页数，在发起刷脏前由协调线程设置
+
+
+  /**
+   * n_flushed_lru和n_flushed_list 分别表示次轮刷新从LRU list刷出的页数和从flush list刷出的页数，
+   * 也就是分别从函数buf_flush_LRU_list和buf_flush_do_batch返回的处理的页数；
+   * succeeded_list用来表示是否对脏页list（flush_list)刷脏成功；
+   * 若是次轮要刷脏的数据页成功的放到IO的队列上则表示成功了，否则返回false；
+   * flush_lru_time和flush_list_time则分别表示刷新LRU list和flush list所用的时间；
+   * flush_lru_pass和flush_list_pass分别表示尝试对LRU list和flush list页进行刷脏的次数。
+   * 当所有的刷脏线程完成后，对于每个slot的这些统计信息会统一计算到全局的page_cleaner_t结构里。
+   */
   ulint n_pages_requested;
   /*!< number of requested pages
   for the slot */
@@ -154,18 +170,28 @@ struct page_cleaner_slot_t {
 };
 
 /** Page cleaner structure common for all threads */
+// 用来管理脏页刷新的结构体
+/**
+ * 这个数据结构是实现多刷脏线程的核心结构。它包含了所有刷脏线程所需要的信息，以及刷脏协调线程和刷脏工作线程之间同步所需要的同步事件。
+ * 所有的刷脏线程共用的，修改任何信息都要先获取互斥锁mutex字段
+ */
 struct page_cleaner_t {
   ib_mutex_t mutex;        /*!< mutex to protect whole of
                            page_cleaner_t struct and
                            page_cleaner_slot_t slots. */
+                           // 唤醒工作线程
   os_event_t is_requested; /*!< event to activate worker
                            threads. */
+                           // 最后一个完成刷脏的工作线程通知协调线程这次的刷脏完成
   os_event_t is_finished;  /*!< event to signal that all
                            slots were finished. */
+                           // 刷脏协调线程是否有脏页需要写到磁盘上，若是没有的话，刷脏线程只需要对LRU列表中的页回收到空闲列表中
   bool requested;          /*!< true if requested pages
                            to flush */
+                           // 需要刷新到lsn的位置，页的最早修改lsn必须小于这个值，它才能被刷出到磁盘上
   lsn_t lsn_limit;         /*!< upper limit of LSN to be
                            flushed */
+                           //  刷脏线程需要刷脏的缓冲池实例的个数
   ulint n_slots;           /*!< total number of slots */
   ulint n_slots_requested;
   /*!< number of slots
@@ -175,6 +201,13 @@ struct page_cleaner_t {
   /*!< number of slots
   in the state
   PAGE_CLEANER_STATE_FLUSHING */
+  /**
+   * 在刷脏过程中记录所有刷脏线程处在各个阶段的线程数目，当一开始刷脏时协调线程会把n_slots_requested
+   *
+   * 设置成当前slots的总数，也即缓冲池实例的个数，而会把n_slots_flushing和n_slots_finished清0
+   *
+   * 每当一个刷脏线程完成一个缓冲池实例的刷脏n_slots_requested会减1、n_slots_finished会加1。所有的刷脏线程完成后，n_slots_requested会为0，n_slots_finished会为slots的总数目。
+   */
   ulint n_slots_finished;
   /*!< number of slots
   in the state
@@ -183,6 +216,7 @@ struct page_cleaner_t {
                               requests for all slots */
   ulint flush_pass;                            /*!< count to finish to flush
                                                requests for all slots */
+                                               // 它用来记录刷脏线程对缓冲池刷脏的当前状态，每一个slot就是一个page_cleaner_slot_t结构
   ut::unique_ptr<page_cleaner_slot_t[]> slots; /*!< pointer to the slots */
   bool is_running;                             /*!< false if attempt
                                                to shutdown */
@@ -2886,6 +2920,13 @@ Requests for all slots to flush all buffer pool instances.
                 oldest_modification is smaller than this should be flushed
                 (if their number does not exceed min_n), otherwise ignored
 */
+// 要求每个 slots 来刷新所有的 buffer pool instance 实例
+/**
+ * 每个slot代表的缓冲池实例计算要刷脏多少页；然后把每个slot的state设置PAGE_CLEANER_STATE_REQUESTED；
+ * 把n_slots_requested设置成当前slots的总数，也即缓冲池实例的个数，同时把n_slots_flushing和n_slots_finished清0，然后唤醒等待的工作线
+ * @param min_n
+ * @param lsn_limit
+ */
 static void pc_request(ulint min_n, lsn_t lsn_limit) {
   if (min_n != ULINT_MAX) {
     /* Ensure that flushing is spread evenly amongst the
@@ -2894,21 +2935,22 @@ static void pc_request(ulint min_n, lsn_t lsn_limit) {
     so no limit here. */
     min_n = (min_n + srv_buf_pool_instances - 1) / srv_buf_pool_instances;
   }
-
+  // 由于page_cleaner是全局的，在修改之前先获取互斥锁
   mutex_enter(&page_cleaner->mutex);
 
   ut_ad(page_cleaner->n_slots_requested == 0);
   ut_ad(page_cleaner->n_slots_flushing == 0);
   ut_ad(page_cleaner->n_slots_finished == 0);
-
+  // 是否需要对flush_list进行刷脏操作，还是只需要对LRU列表刷脏
   page_cleaner->requested = (min_n > 0);
+  // 设置lsn_limit, 只有数据页的oldest_modification小于它的才会刷出去
   page_cleaner->lsn_limit = lsn_limit;
 
   for (ulint i = 0; i < page_cleaner->n_slots; i++) {
     page_cleaner_slot_t *slot = &page_cleaner->slots[i];
 
     ut_ad(slot->state == PAGE_CLEANER_STATE_NONE);
-
+    // 两种特殊情况设置每个slot需要刷脏的页数，当为ULINT_MAX表示服务器比较空闲，则刷脏线程可以尽可能的把当前的所有脏页都刷出去；而当为0是，表示没有脏页可刷。
     if (min_n == ULINT_MAX) {
       slot->n_pages_requested = ULINT_MAX;
     } else if (min_n == 0) {
@@ -2917,34 +2959,40 @@ static void pc_request(ulint min_n, lsn_t lsn_limit) {
 
     /* slot->n_pages_requested was already set by
     Adaptive_flush::page_recommendation() */
-
+    // 在唤醒刷脏工作线程之前，将每个slot的状态设置成requested状态
     slot->state = PAGE_CLEANER_STATE_REQUESTED;
   }
 
+  // 协调线程在唤醒工作线程之前，设置请求要刷脏的slot个数，
+  // 以及清空正在刷脏和完成刷脏的slot个数。只有当完成的刷脏个数等于总的slot个数时，才表示次轮的刷脏结束。
   page_cleaner->n_slots_requested = page_cleaner->n_slots;
   page_cleaner->n_slots_flushing = 0;
   page_cleaner->n_slots_finished = 0;
 
   os_event_set(page_cleaner->is_requested);
-
+  // 退出线程
   mutex_exit(&page_cleaner->mutex);
 }
 
 /**
 Do flush for one slot.
 @return	the number of the slots which has not been treated yet. */
+// 真正将一个 slot 进行 flush 操作的函数
+// 刷脏线程真正做刷脏动作的函数，协调线程和工作线程都会调用
 static ulint pc_flush_slot(void) {
   std::chrono::steady_clock::duration lru_time;
   std::chrono::steady_clock::duration flush_list_time{};
   int lru_pass = 0;
   int list_pass = 0;
-
+  // 由于刷脏线程和slot并不是事先绑定对应的关系。所以工作线程在刷脏时首先会找到一个未被占用的slot，修改其状态，表示已被调度，然后对该slot所对应的缓冲池instance进行操作
+  // 所以需要先加锁
   mutex_enter(&page_cleaner->mutex);
 
   if (page_cleaner->n_slots_requested > 0) {
     page_cleaner_slot_t *slot = nullptr;
     ulint i;
 
+    // 找到一个处理的 slot
     for (i = 0; i < page_cleaner->n_slots; i++) {
       slot = &page_cleaner->slots[i];
 
@@ -2956,13 +3004,16 @@ static ulint pc_flush_slot(void) {
     /* slot should be found because
     page_cleaner->n_slots_requested > 0 */
     ut_a(i < page_cleaner->n_slots);
-
+    // 根据找到的slot，对应其缓冲池的实例
     buf_pool_t *buf_pool = buf_pool_from_array(i);
-
+    // 一旦找到一个未被占用的slot，
+    // 则需要把全局的page_cleaner里的n_slots_rqeusted减1、把n_slots_flushing加1，
+    // 同时这个slot的状态从PAGE_CLEANER_STATE_REQUESTED状态改成PAGE_CLEANER_STATE_FLUSHING。
     page_cleaner->n_slots_requested--;
     page_cleaner->n_slots_flushing++;
     slot->state = PAGE_CLEANER_STATE_FLUSHING;
 
+    // 若是所有的slot都处理了，则清楚is_requested的通知标志
     if (page_cleaner->n_slots_requested == 0) {
       os_event_reset(page_cleaner->is_requested);
     }
@@ -2974,8 +3025,9 @@ static ulint pc_flush_slot(void) {
       mutex_exit(&page_cleaner->mutex);
 
       const auto lru_start = std::chrono::steady_clock::now();
-
+      // 分别调用buf_flush_LRU_list() 和buf_flush_do_batch() 对LRU和flush_list刷脏
       /* Flush pages from end of LRU if required */
+      // // 开始刷LRU队列
       slot->n_flushed_lru = buf_flush_LRU_list(buf_pool);
 
       lru_time = std::chrono::steady_clock::now() - lru_start;
@@ -2987,7 +3039,7 @@ static ulint pc_flush_slot(void) {
         /* Flush pages from flush_list if required */
         if (page_cleaner->requested) {
           const auto flush_list_start = std::chrono::steady_clock::now();
-
+          //  // 刷flush_list队列
           slot->succeeded_list = buf_flush_do_batch(
               buf_pool, BUF_FLUSH_LIST, slot->n_pages_requested,
               page_cleaner->lsn_limit, &slot->n_flushed_list);
@@ -3001,6 +3053,10 @@ static ulint pc_flush_slot(void) {
       }
       mutex_enter(&page_cleaner->mutex);
     }
+
+    // 刷脏结束把n_slots_flushing减1，
+    // 把n_slots_finished加1，
+    // 同时把这个slot的状态从PAGE_CLEANER_STATE_FLUSHING状态改成PAGE_CLEANER_STATE_FINISHED状态
     page_cleaner->n_slots_flushing--;
     page_cleaner->n_slots_finished++;
     slot->state = PAGE_CLEANER_STATE_FINISHED;
@@ -3011,7 +3067,7 @@ static ulint pc_flush_slot(void) {
         std::chrono::duration_cast<std::chrono::milliseconds>(flush_list_time);
     slot->flush_lru_pass += lru_pass;
     slot->flush_list_pass += list_pass;
-
+    // 同时若这个工作线程是最后一个完成的，则需要通过is_finished事件，通知协调进程所有的工作线程刷脏结束。
     if (page_cleaner->n_slots_requested == 0 &&
         page_cleaner->n_slots_flushing == 0) {
       os_event_set(page_cleaner->is_finished);
@@ -3031,12 +3087,13 @@ Wait until all flush requests are finished.
 @param n_flushed_list	number of pages flushed from the end of the
                         flush_list.
 @return			true if all flush_list flushing batch were success. */
+// 主要由协调线程调用，它主要用来收集每个工作线程分别对LRU和flush_list列表刷脏的页数。以及为每个slot清0次轮请求刷脏的页数和重置它的状态为NONE。
 static bool pc_wait_finished(ulint *n_flushed_lru, ulint *n_flushed_list) {
   bool all_succeeded = true;
 
   *n_flushed_lru = 0;
   *n_flushed_list = 0;
-
+  //  协调线程通知工作线程和完成自己的刷脏任务之后，要等在is_finished事件上，知道最后一个完成的工作线程会set这个事件唤醒协调线程
   os_event_wait(page_cleaner->is_finished);
 
   mutex_enter(&page_cleaner->mutex);
@@ -3044,23 +3101,23 @@ static bool pc_wait_finished(ulint *n_flushed_lru, ulint *n_flushed_list) {
   ut_ad(page_cleaner->n_slots_requested == 0);
   ut_ad(page_cleaner->n_slots_flushing == 0);
   ut_ad(page_cleaner->n_slots_finished == page_cleaner->n_slots);
-
+  // 遍历每个 cleaner
   for (ulint i = 0; i < page_cleaner->n_slots; i++) {
     page_cleaner_slot_t *slot = &page_cleaner->slots[i];
 
     ut_ad(slot->state == PAGE_CLEANER_STATE_FINISHED);
-
+    // 统计每个slot分别通过LRU和flush_list队列刷出去的页数
     *n_flushed_lru += slot->n_flushed_lru;
     *n_flushed_list += slot->n_flushed_list;
     all_succeeded &= slot->succeeded_list;
-
+    // 把所有slot的状态设置为NONE
     slot->state = PAGE_CLEANER_STATE_NONE;
-
+    // 为每个slot清除请求刷脏的页数
     slot->n_pages_requested = 0;
   }
-
+  // 清零完成的slot刷脏个数，为下一轮刷脏重新统计做准备
   page_cleaner->n_slots_finished = 0;
-
+  // 清除is_finished事件的通知标志
   os_event_reset(page_cleaner->is_finished);
 
   mutex_exit(&page_cleaner->mutex);
@@ -3189,6 +3246,7 @@ void buf_flush_page_cleaner_disabled_debug_update(THD *thd, SYS_VAR *var,
 /** Thread tasked with flushing dirty pages from the buffer pools.
 As of now we'll have only one coordinator.
 @param[in]	n_page_cleaners	Number of page cleaner threads to create */
+// 从 buffer pool 中刷新脏页的任务线程 目前就只有一个协调者
 static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
   auto loop_start_time = std::chrono::steady_clock::now();
   ulint n_flushed = 0;
@@ -3232,11 +3290,13 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
         recv_sys->spaces == nullptr) {
       break;
     }
-
+    // 调用 pc_request 这个函数的作用就是为每个slot代表的缓冲池实例计算要刷脏多少页
+    // 然后把每个slot的state设置PAGE_CLEANER_STATE_REQUESTED, 唤醒等待的工作线程
     switch (recv_sys->flush_type) {
       case BUF_FLUSH_LRU:
         /* Flush pages from end of LRU if required */
         pc_request(0, LSN_MAX);
+        // 会调用pc_flush_slot()，和其它的工作线程并行去做刷脏页操作。一但它做完自己的刷脏操作，就会调用pc_wait_finished()等待所有的工作线程完成刷脏操作
         while (pc_flush_slot() > 0) {
         }
         pc_wait_finished(&n_flushed_lru, &n_flushed_list);
@@ -3258,9 +3318,10 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
     os_event_reset(recv_sys->flush_start);
     os_event_set(recv_sys->flush_end);
   }
-
+  // 等待事件
   os_event_wait(buf_flush_event);
 
+  // 协调线程会收集一些统计信息，比如这轮刷脏所用的时间，以及对LRU和flush_list队列刷脏的页数等。然后会根据当前的负载计算应该sleep的时间、以及下次刷脏的页数，为下一轮的刷脏做准备。在
   ulint ret_sleep = 0;
   ulint n_evicted = 0;
   ulint n_flushed_last = 0;
@@ -3270,6 +3331,19 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
   bool was_server_active = true;
   int64_t sig_count = os_event_reset(buf_flush_event);
 
+  /**
+   * buf_flush_page_cleaner_coordinator协调线程的主循环主线程以最多1s的间隔或者收到
+   * buf_flush_event事件就会触发进行一轮的刷脏。协调线程首先会调用pc_request()函数，
+   * 这个函数的作用就是为每个slot代表的缓冲池实例计算要刷脏多少页，
+   * 然后把每个slot的state设置PAGE_CLEANER_STATE_REQUESTED, 唤醒等待的工作线程。
+   * 由于协调线程也会和工作线程一样做具体的刷脏操作，所以它在唤醒工作线程之后，会调用pc_flush_slot()，
+   * 和其它的工作线程并行去做刷脏页操作。一但它做完自己的刷脏操作，就会调用pc_wait_finished()等待所有的工作线程完成刷脏操作。
+   * 完成这一轮的刷脏之后，协调线程会收集一些统计信息，比如这轮刷脏所用的时间，以及对LRU和flush_list队列刷脏的页数等。
+   * 然后会根据当前的负载计算应该sleep的时间、以及下次刷脏的页数，为下一轮的刷脏做准备。
+   * 在主循环线程跳过与多线程刷脏不相关的部分，主循环的核心主要就集中在pc_request()、
+   * pc_flush_slot()以及pc_wait_finished()三个函数的调用上。精简后的部分代码如下：
+   */
+  // 当未停止时，就会一直执行
   while (srv_shutdown_state.load() < SRV_SHUTDOWN_CLEANUP) {
     /* We consider server active if either we have just discovered a first
     activity after a period of inactive server, or we are after the period
@@ -3282,6 +3356,7 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
     /* The page_cleaner skips sleep if the server is
     idle and there are no pending IOs in the buffer pool
     and there is work to do. */
+    // 根据 server 的空闲程度决定是否要 sleep
     if ((is_server_active || buf_get_n_pending_read_ios() || n_flushed == 0) &&
         !is_sync_flush) {
       ret_sleep = pc_sleep_if_needed(loop_start_time + std::chrono::seconds{1},
@@ -3296,7 +3371,7 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
     } else {
       ret_sleep = 0;
     }
-
+    // 重制事件
     sig_count = os_event_reset(buf_flush_event);
 
     if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
@@ -3387,6 +3462,7 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       }
 
       /* Request flushing for threads */
+      // 就是为每个slot代表的缓冲池实例计算要刷脏多少页，然后把每个slot的state设置PAGE_CLEANER_STATE_REQUESTED, 唤醒等待的工作线程
       pc_request(n_to_flush, lsn_limit);
 
       const auto flush_start = std::chrono::steady_clock::now();
@@ -3588,6 +3664,10 @@ thread_exit:
 }
 
 /** Worker thread of page_cleaner. */
+// 脏页清理的工作线程
+/**
+ * page_cleaner_t的is_requested事件上，一旦协调线程通过is_requested唤醒所有等待的工作线程，工作线程就调用pc_flush_slot()函数去完成刷脏动作
+ */
 static void buf_flush_page_cleaner_thread() {
 #ifdef UNIV_LINUX
   /* linux might be able to set different setting for each thread
@@ -3599,6 +3679,7 @@ static void buf_flush_page_cleaner_thread() {
 #endif /* UNIV_LINUX */
 
   for (;;) {
+    // 等待对应的事件
     os_event_wait(page_cleaner->is_requested);
 
     ut_d(buf_flush_page_cleaner_disabled_loop());

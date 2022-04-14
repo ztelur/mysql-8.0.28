@@ -545,6 +545,8 @@ byte *row_mysql_store_col_in_innobase_format(
 /** Convert a row in the MySQL format to a row in the Innobase format. Note that
  the function to convert a MySQL format key value to an InnoDB dtuple is
  row_sel_convert_mysql_key_to_innobase() in row0sel.cc. */
+ // 将 MySQL 的行转换为 InnoDB 的行
+// server层和innodb层都有自己对于record的记录格式，需要进行转换
 static void row_mysql_convert_row_to_innobase(
     dtuple_t *row,            /*!< in/out: Innobase row where the
                               field type information is already
@@ -567,15 +569,15 @@ static void row_mysql_convert_row_to_innobase(
 
   ut_ad(prebuilt->template_type == ROW_MYSQL_WHOLE_ROW);
   ut_ad(prebuilt->mysql_template);
-
+  // 遍历对应的模版
   for (i = 0; i < prebuilt->n_template; i++) {
     bool is_multi_val = false;
 
-    templ = prebuilt->mysql_template + i;
+    templ = prebuilt->mysql_template + i; // 从mysql层取出来temp1,
 
     if (templ->is_virtual) {
       ut_ad(n_v_col < dtuple_get_n_v_fields(row));
-      dfield = dtuple_get_nth_v_field(row, n_v_col);
+      dfield = dtuple_get_nth_v_field(row, n_v_col); // 从row中取出来dfield，
       n_v_col++;
       if (dfield_is_multi_value(dfield)) {
         is_multi_val = true;
@@ -616,6 +618,7 @@ static void row_mysql_convert_row_to_innobase(
       copy. */
       dfield_multi_value_dup(dfield, prebuilt->heap);
     } else {
+      // 然后用temp1去填充。
       row_mysql_store_col_in_innobase_format(
           dfield, prebuilt->ins_upd_rec_buff + templ->mysql_col_offset,
           TRUE, /* MySQL row format data */
@@ -1498,6 +1501,7 @@ INSERT graph.
 @param[in]	mysql_rec	row in the MySQL format
 @param[in,out]	prebuilt	prebuilt struct in MySQL handle
 @return error code or DB_SUCCESS */
+// 使用graph结构存储insert的信息
 static dberr_t row_insert_for_mysql_using_ins_graph(const byte *mysql_rec,
                                                     row_prebuilt_t *prebuilt) {
   trx_savept_t savept;
@@ -1555,7 +1559,7 @@ static dberr_t row_insert_for_mysql_using_ins_graph(const byte *mysql_rec,
   trx->op_info = "inserting";
 
   row_mysql_delay_if_needed();
-
+  // 如果没有启动事务，就启动一次事务，直接调用到 trx_start_if_not_started_xa_low
   trx_start_if_not_started_xa(trx, true);
 
   row_get_prebuilt_insert_row(prebuilt);
@@ -1708,9 +1712,18 @@ dberr_t row_insert_for_mysql(const byte *mysql_rec, row_prebuilt_t *prebuilt) {
   relaxed including locking of table, transaction handling, etc.
   Use direct cursor interface for inserting to intrinsic tables. */
   // 根据不同的编译选项，执行不同的逻辑
+  // https://dev.mysql.com/blog-archive/mysql-5-7-innodb-intrinsic-tables/
+  /**
+   * row_insert_for_mysql_using_cursor直接跳过了加锁的lock_table过程。
+       因为临时表只有本线程可以看见，所以减少了InnoDB的加锁过程。
+然后，如果是intrinsic table，就直接插入，减少了undo的生成。
+如果不是，需要加lock，并生成undo信息。
+   */
   if (prebuilt->table->is_intrinsic()) {
     return (row_insert_for_mysql_using_cursor(mysql_rec, prebuilt));
   } else {
+    // 一般都走这个
+    // row_insert_for_mysql
     return (row_insert_for_mysql_using_ins_graph(mysql_rec, prebuilt));
   }
 }

@@ -4059,6 +4059,7 @@ int acl_authenticate(THD *thd, enum_server_command command) {
            acl_user->user_resource.conn_per_hour ||
            acl_user->user_resource.user_conn ||
            global_system_variables.max_user_connections) &&
+          // 创建对应的 user_conn
           get_or_create_user_conn(
               thd,
               (opt_old_style_user_limits ? sctx->user().str
@@ -4089,6 +4090,7 @@ int acl_authenticate(THD *thd, enum_server_command command) {
     if ((uc = thd->get_user_connect()) &&
         (uc->user_resources.conn_per_hour || uc->user_resources.user_conn ||
          global_system_variables.max_user_connections) &&
+        // 检查是否超过了最大连接数
         check_for_max_user_connections(thd, uc)) {
       goto end;  // The error is set in check_for_max_user_connections()
     }

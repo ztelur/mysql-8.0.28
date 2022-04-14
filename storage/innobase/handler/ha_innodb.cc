@@ -8872,11 +8872,12 @@ int ha_innobase::write_row(uchar *record) /*!< in: a row in MySQL format */
   }
 
   /* Handling of Auto-Increment Columns. */
+  // 处理自增键处理
   if (table->next_number_field && record == table->record[0]) {
     /* Reset the error code before calling
     innobase_get_auto_increment(). */
     m_prebuilt->autoinc_error = DB_SUCCESS;
-
+    // 更新自增建
     error_result = update_auto_increment();
     if (error_result) {
       /* We don't want to mask autoinc overflow errors. */

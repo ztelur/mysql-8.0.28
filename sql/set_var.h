@@ -99,10 +99,13 @@ enum enum_var_type : int {
   optionally it can be assigned to, optionally it can have a command-line
   counterpart with the same name.
 */
+/**
+ * 系统参数定义，其他参数都是它的子类，会在构造函数中将其加入到 all_sys_vars 参数列表中
+ */
 class sys_var {
  public:
-  sys_var *next;
-  LEX_CSTRING name;
+  sys_var *next; // next指针，all_sys_vars链表遍历的时候使用
+  LEX_CSTRING name; // 参数名字
   /**
     If the variable has an alias in the persisted variables file, this
     should point to it.  This has the following consequences:
@@ -159,19 +162,19 @@ class sys_var {
   typedef bool (*on_update_function)(sys_var *self, THD *thd,
                                      enum_var_type type);
 
-  int flags;                      ///< or'ed flag_enum values
-  int m_parse_flag;               ///< either PARSE_EARLY or PARSE_NORMAL.
+  int flags;                      ///< or'ed flag_enum values 参数标记，比如说global变量，session变量
+  int m_parse_flag;               ///< either PARSE_EARLY or PARSE_NORMAL. PARSE_EARLY 优先解析，PARSE_NORMAL 正常解析
   const SHOW_TYPE show_val_type;  ///< what value_ptr() returns for sql_show.cc
-  my_option option;               ///< min, max, default values are stored here
+  my_option option;               ///< min, max, default values are stored here 参数min, max, default值
   PolyLock *guard;                ///< *second* lock that protects the variable
-  ptrdiff_t offset;  ///< offset to the value from global_system_variables
-  on_check_function on_check;
+  ptrdiff_t offset;  ///< offset to the value from global_system_variables 距离global_system_variables的offset值，实际的参数存储地址空间
+  on_check_function on_check;  // check函数
   /**
     Pointer to function to be invoked before updating system variable (but
     after calling on_check hook), while we do not hold any locks yet.
   */
   pre_update_function pre_update;
-  on_update_function on_update;
+  on_update_function on_update; // update函数
   const char *const deprecation_substitute;
   bool is_os_charset;  ///< true if the value is in character_set_filesystem
   struct get_opt_arg_source source;

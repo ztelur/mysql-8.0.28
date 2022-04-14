@@ -951,13 +951,14 @@ static Sys_var_ulong Sys_back_log(
     "gets very many connection requests in a very short time",
     READ_ONLY GLOBAL_VAR(back_log), CMD_LINE(REQUIRED_ARG),
     VALID_RANGE(0, 65535), DEFAULT(0), BLOCK_SIZE(1));
-
+// basedir 参数的类型
 static Sys_var_charptr Sys_basedir(
-    "basedir",
+    "basedir", // 参数名字，和配置文件里面对应
     "Path to installation directory. All paths are "
-    "usually resolved relative to this",
-    READ_ONLY NON_PERSIST GLOBAL_VAR(mysql_home_ptr),
-    CMD_LINE(REQUIRED_ARG, 'b'), IN_FS_CHARSET, DEFAULT(nullptr));
+    "usually resolved relative to this", // 注释
+    READ_ONLY NON_PERSIST GLOBAL_VAR(mysql_home_ptr), // flag标记，offset偏移量，size
+    CMD_LINE(REQUIRED_ARG, 'b'), IN_FS_CHARSET, DEFAULT(nullptr)); //参数校验，编码， 默认值
+  // 参数的flag是read_only + 非持久化 + 全局变量
 
 /*
   --authentication_policy will take precendence over this variable

@@ -832,7 +832,7 @@ enum trx_rseg_type_t {
   TRX_RSEG_TYPE_REDO,     /*!< redo rollback segment. */
   TRX_RSEG_TYPE_NOREDO    /*!< non-redo rollback segment. */
 };
-
+// 事务的结构
 struct trx_t {
   enum isolation_level_t {
 
@@ -1090,6 +1090,7 @@ struct trx_t {
   lsn_t commit_lsn; /*!< lsn at the time of the commit */
 
   /*------------------------------*/
+  // mysql thread handle
   THD *mysql_thd; /*!< MySQL thread handle corresponding
                   to this trx, or NULL */
 
@@ -1191,6 +1192,7 @@ struct trx_t {
                          transaction will not be assigned an
                          UNDO log. */
   bool auto_commit;      /*!< true if it is an autocommit */
+  // 该事务需要加的锁，在mysql层判断
   ib_uint32_t will_lock; /*!< Will acquire some locks. Increment
                          each time we determine that a lock will
                          be acquired by the MySQL layer. */
@@ -1230,6 +1232,7 @@ struct trx_t {
   instance is re-used in trx_start_low(). It is used to track
   whether a transaction has been restarted since it was tagged
   for asynchronous rollback. */
+  // 这个事务结构体的版本号，会在 trx_start_low 中使用，用来标记是否被重复使用
   ulint version;
 
   XID *xid;                    /*!< X/Open XA transaction
@@ -1239,6 +1242,7 @@ struct trx_t {
                                by this transaction */
 #endif                         /* !UNIV_HOTBACKUP */
                                /*------------------------------*/
+  // 是否被 InnoDB 的 api 开启的事务
   bool api_trx;                /*!< trx started by InnoDB API */
   bool api_auto_commit;        /*!< automatic commit */
   bool read_write;             /*!< if read and write operation */

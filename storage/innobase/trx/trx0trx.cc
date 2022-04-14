@@ -1239,6 +1239,7 @@ void trx_assign_rseg_temp(trx_t *trx) {
 }
 
 /** Starts a transaction. */
+// 开启一个事务
 static void trx_start_low(
     trx_t *trx,      /*!< in: transaction */
     bool read_write) /*!< in: true if read-write transaction */
@@ -1256,13 +1257,14 @@ static void trx_start_low(
   ut_ad(UT_LIST_GET_LEN(trx->lock.trx_locks) == 0);
   ut_ad(!(trx->in_innodb & TRX_FORCE_ROLLBACK));
   ut_ad(trx_can_be_handled_by_current_thread_or_is_hp_victim(trx));
-
+  // 版本++1
   ++trx->version;
 
   /* Check whether it is an AUTOCOMMIT SELECT */
+  // 判断是否需要自动提交
   trx->auto_commit = (trx->api_trx && trx->api_auto_commit) ||
                      thd_trx_is_auto_commit(trx->mysql_thd);
-
+  // 判断是否为只读
   trx->read_only = (trx->api_trx && !trx->read_write) ||
                    (!trx->internal && thd_trx_is_read_only(trx->mysql_thd)) ||
                    srv_read_only_mode;
@@ -1295,7 +1297,7 @@ static void trx_start_low(
   providing a fix which would guarantee that state of printed information
   about such transactions is always consistent, would take much more work.
   TODO: check performance gain from this micro-optimization on ARM. */
-
+  // 记录事务的开始时间
   if (trx->mysql_thd != nullptr) {
     trx->start_time.store(thd_start_time(trx->mysql_thd),
                           std::memory_order_relaxed);
@@ -1343,9 +1345,9 @@ static void trx_start_low(
     /* Temporary rseg is assigned only if the transaction
     updates a temporary table */
     DEBUG_SYNC_C("trx_sys_before_assign_id");
-
+    // 因为要分配全局的事务id，所以需要进行加锁
     trx_sys_mutex_enter();
-
+    // 分配全局事务id
     trx->id = trx_sys_allocate_trx_id();
 
     trx_sys->rw_trx_ids.push_back(trx->id);
@@ -1358,7 +1360,7 @@ static void trx_start_low(
     trx->state.store(TRX_STATE_ACTIVE, std::memory_order_relaxed);
 
     ut_ad(trx_sys_validate_trx_list());
-
+    // 退出锁
     trx_sys_mutex_exit();
 
     trx_sys_rw_trx_add(trx);
@@ -3210,11 +3212,14 @@ trx_t *trx_get_trx_by_xid(const XID *xid) {
 /** Starts the transaction if it is not yet started.
 @param[in,out] trx Transaction
 @param[in] read_write True if read write transaction */
+// 如果尚未开始一个事务，那么就开启一个事务
 void trx_start_if_not_started_xa_low(trx_t *trx, bool read_write) {
   ut_ad(trx_can_be_handled_by_current_thread_or_is_hp_victim(trx));
+  // 根据 trx 的转台进行判断
   switch (trx->state.load(std::memory_order_relaxed)) {
     case TRX_STATE_NOT_STARTED:
     case TRX_STATE_FORCED_ROLLBACK:
+      // 启动一个事务
       trx_start_low(trx, read_write);
       return;
 

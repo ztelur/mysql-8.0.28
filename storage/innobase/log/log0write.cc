@@ -1792,6 +1792,14 @@ static inline void update_current_write_ahead(log_t &log, uint64_t real_offset,
 
 }  // namespace Log_files_write_impl
 
+// 写 redo log
+/**
+ * 此函主要是把buffer的redo日志，通过write_ahead 功能，把redo日志写入ib_logfile的缓存（pageCache）*
+ * @param log
+ * @param buffer
+ * @param buffer_size
+ * @param start_lsn
+ */
 static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
                                    lsn_t start_lsn) {
   ut_ad(log_writer_mutex_own(log));
@@ -1803,19 +1811,36 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
   validate_start_lsn(log, start_lsn, buffer_size);
 
   checkpoint_no_t checkpoint_no = log.next_checkpoint_no.load();
-
+  // /*得到当前start_lsn在文件中的偏移，ib_logfile是循环使用，start_lsn 可能是ib_logfile总大小的几倍，start_lsn的大小转换成文件的偏移*/
   const auto real_offset = compute_real_offset(log, start_lsn);
 
   bool write_from_log_buffer;
 
+  // /*计算本次要写入redo日志的大小
+  //         当大于8192时，则截断为8192，一次最大写入8192
+  //         根据情况判断，判断是否需要把redo日志复制到write_ahead_buf,确定其write_from_log_buffer状态，为true 则不需要复制，为false ，需要把buffer中的redo复制到write_from_log_buffer
+  //         */
   auto write_size = compute_how_much_to_write(log, real_offset, buffer_size,
                                               write_from_log_buffer);
-
+  /*
+         start_next_file 函数解析
+         当上次写的文件尾时，本次返回为0，则做文件切换
+         主要更新log.current_file_lsn  log.current_file_real_offset  log.current_file_end_offset 这三个变量（这三个变量），实现文件的切换
+         这三个变量仅在启动时 和切换文件时修改
+         log.current_file_lsn  随着 lsn的增长而增长
+         log.current_file_real_offset 是整个文件总和的偏移量，>=2048 且 < 全部ib_logfile文件的总大小
+         log.current_file_end_offset 当前要写的ib_logfile 文件的结尾
+        */
   if (write_size == 0) {
     start_next_file(log, start_lsn);
     return;
   }
 
+  /**
+   * *如果write_size大与512，则填充block的12字节的头和4字节的校验尾
+         只填充512的block，如果不足512的部分，不在此函数的处理范围中
+         */
+   */
   prepare_full_blocks(log, buffer, write_size, start_lsn, checkpoint_no);
 
   byte *write_buf;
@@ -1849,15 +1874,21 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
     /* Else: we are doing yet another incomplete block write within the
     same block as the one in which we did the previous write. */
 #endif /* UNIV_DEBUG */
-
+    // 利用write_buf指针，指向write_ahead缓存*/
     write_buf = log.write_ahead_buf;
 
     /* We write all the data directly from the write-ahead buffer,
     where we first need to copy the data. */
+    // /*write_size大小的redo从buffer中复制到log.write_ahead_buf
+    //           把log.write_ahead_buf中最后一个不足512的block 补0
+    //           并把write_size大小512向下对齐，如果不能被512整除，则把最后一个block补0的长度加到write_size，使其能够与512整除
+    //           */
     copy_to_write_ahead_buffer(log, buffer, write_size, start_lsn,
                                checkpoint_no);
-
+    //  /*判断write_ahead的虚拟空间是否完全被占用，用1个字节来判断，如果1字节个都放不下则虚拟空间用尽*/
     if (!current_write_ahead_enough(log, real_offset, 1)) {
+      //  /*write_ahead 虚拟空间用尽时,需要判断ib_logfile 当前文件的剩余空间（当前偏移到文件尾的偏移）是否足够放下当前要写的redo日志的大小
+      //            返回值为write_ahead 虚拟空间剩余空间
       written_ahead = prepare_for_write_ahead(log, real_offset, write_size);
     }
   }
@@ -1866,17 +1897,21 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
 
   /* Now, we know, that we are going to write completed
   blocks only (originally or copied and completed). */
+  // /*把write_size的小的redo日志写入ib_logfile的缓存（pageCache）*/
   write_blocks(log, write_buf, write_size, real_offset);
 
   LOG_SYNC_POINT("log_writer_before_lsn_update");
 
   const lsn_t old_write_lsn = log.write_lsn.load();
-
+  // /*lsn_advance 不是写入pageCache的大小，补0的部分不包含在此变量中，lsn_advance 为当前写入redo日志的大小
+  //     当对于连续几次小范围的redo日志写入时，lsn_advance为几次写的总和
+  //     start_lsn 为512对齐，并不是上次结束的位置
+  //     start_lsn <= old_write_lsn
   const lsn_t new_write_lsn = start_lsn + lsn_advance;
   ut_a(new_write_lsn > log.write_lsn.load());
-
+  // /*更新log.write_lsn为当前最新的值*/
   log.write_lsn.store(new_write_lsn);
-
+  // /*通知Log write_notifier thread*/
   notify_about_advanced_write_lsn(log, old_write_lsn, new_write_lsn);
 
   LOG_SYNC_POINT("log_writer_before_buf_limit_update");
@@ -1901,7 +1936,10 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
   MONITOR_SET(MONITOR_LOG_FREE_SPACE, free_space);
 
   log.n_log_ios++;
-
+  // /*判断是否更新 log.write_ahead_end_offset
+  //          本地虚拟空间用尽时不更新此变量
+  //          当本地虚拟空间用尽后，第一次写入时，更新log.write_ahead_end_offset，即增加8192
+  //         */
   update_current_write_ahead(log, real_offset, write_size);
 }
 
@@ -2143,6 +2181,7 @@ static void log_writer_write_buffer(log_t &log, lsn_t next_write_lsn) {
   byte *buf_end = log.buf + end_offset;
 
   /* Do the write to the log files */
+  // 将 redo log 写入到 log file中
   log_files_write_buffer(
       log, buf_begin, buf_end - buf_begin,
       ut_uint64_align_down(last_write_lsn, OS_FILE_LOG_BLOCK_SIZE));

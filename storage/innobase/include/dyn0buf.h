@@ -409,7 +409,11 @@ class dyn_buf_t {
   for small REDO log records */
   block_t m_first_block;
 };
-
+// mtr_buf_t
+/**
+ * 由一个双向链表组成的动态buffer，每个元素是512B大小的buffer（512B刚好匹配一个log block大小）。
+ * 随着mtr_buf_t存储的数据的增加，它会自动生成新的512B的buffer，并加入双向链表中。​
+ */
 typedef dyn_buf_t<DYN_ARRAY_DATA_SIZE> mtr_buf_t;
 
 /** mtr_buf_t copier */

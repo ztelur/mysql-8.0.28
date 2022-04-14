@@ -47,6 +47,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "trx0types.h"
 
 /** Start a mini-transaction. */
+// 启动一个mini-transaction
 #define mtr_start(m) (m)->start()
 
 /** Start a synchronous mini-transaction */
@@ -120,9 +121,11 @@ savepoint. */
 #define mtr_get_log(m) (m)->get_log()
 
 /** Push an object to an mtr memo stack. */
+// buffer RW_NO_LATCH 入栈
 #define mtr_memo_push(m, o, t) (m)->memo_push(o, t)
 
 /** Lock an rw-lock in s-mode. */
+//
 #define mtr_s_lock(l, m) (m)->s_lock((l), __FILE__, __LINE__)
 
 /** Lock an rw-lock in x-mode. */
@@ -179,22 +182,28 @@ inline std::ostream &operator<<(std::ostream &out, const mtr_memo_slot_t &obj) {
 }
 
 /** Mini-transaction handle and buffer */
+// mini-transaction 的处理
 struct mtr_t {
   /** State variables of the mtr */
   struct Impl {
     /** memo stack for locks etc. */
+    // mtr 持有锁的栈 管理mtr持有的锁信息。对于持有的page锁，还要保留page指针，这是为了在commit时，将修改的脏页加入flush list中。
     mtr_buf_t m_memo;
 
     /** mini-transaction log */
+    // mtr产生的日志 保存mtr修改操作对应的redo日志。在commit时，将redo日志一起拷贝到log_sys模块的公共日志buffer中。
     mtr_buf_t m_log;
 
     /** true if mtr has made at least one buffer pool page dirty */
+    // 是否产生buffer pool脏页
     bool m_made_dirty;
 
     /** true if inside ibuf changes */
+    // insert buffer 是否修改
     bool m_inside_ibuf;
 
     /** true if the mini-transaction modified buffer pool pages */
+    // 是否修改buffer pool pages
     bool m_modifications;
 
     /** true if mtr is forced to NO_LOG mode because redo logging is
@@ -208,13 +217,16 @@ struct mtr_t {
 
     /** Count of how many page initial log records have been
     written to the mtr log */
+    // log 记录数
     ib_uint32_t m_n_log_recs;
 
     /** specifies which operations should be logged; default
     value MTR_LOG_ALL */
+    // 日志模式，默认MTR_LOG_ALL
     mtr_log_t m_log_mode;
 
     /** State of the transaction */
+    // mini transaction所处状态 MTR_ACTIVE, MTR_COMMITTING, MTR_COMMITTED
     mtr_state_t m_state;
 
     /** Flush Observer */
@@ -222,6 +234,7 @@ struct mtr_t {
 
 #ifdef UNIV_DEBUG
     /** For checking corruption. */
+    // 魔术字
     ulint m_magic_n;
 
 #endif /* UNIV_DEBUG */

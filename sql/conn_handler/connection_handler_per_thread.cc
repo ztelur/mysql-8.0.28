@@ -139,7 +139,12 @@ void Per_thread_connection_handler::destroy() {
   @retval !NULL  Pointer to Channel_info object representing the new connection
                  to be served by this pthread.
 */
-
+/**
+ * 如果 blocked_pthread_count < max_blocked_pthreads，blocked_pthread_count++，
+ * 然后等待被 COND_thread_cache 唤醒，唤醒之后 blocked_pthread_count– ,
+ * 返回 waiting_channel_info_list 中的一个 channel_info ，进行 handle_connections 的下一个循环
+ * @return
+ */
 Channel_info *Per_thread_connection_handler::block_until_new_connection() {
   Channel_info *new_conn = nullptr;
   mysql_mutex_lock(&LOCK_thread_cache);
@@ -297,6 +302,7 @@ static void *handle_connection(void *arg) {
     mysql_socket_set_thread_owner(socket);
     thd_manager->add_thd(thd);
     // 第一次循环执行prepare，后面跳过，进行 login 和权限校验工作 权限认证
+    // 同一个用户的连接，THD 都和同一个 USER_CONN 对象绑定
     if (thd_prepare_connection(thd))
       handler_manager->inc_aborted_connects();
     else {
@@ -304,11 +310,14 @@ static void *handle_connection(void *arg) {
       while (thd_connection_alive(thd)) {
         if (do_command(thd)) break;
       }
+      // 结束请求
       end_connection(thd);
     }
+    // 完成请求
     close_connection(thd, 0, false, false);
 
     thd->get_stmt_da()->reset_diagnostics_area();
+    // 释放资源
     thd->release_resources();
 
     // Clean up errors now, before possibly waiting for a new connection.
@@ -331,6 +340,8 @@ static void *handle_connection(void *arg) {
     // Server is shutting down so end the pthread.
     if (connection_events_loop_aborted()) break;
     // 进入 thread cache，等待新连接复用
+    // 进入 thread cache，等待新连接复用
+    // 线程结束之前，会执行 block_until_new_connection，尝试进入 thread cache 等待其他连接复用
     channel_info = Per_thread_connection_handler::block_until_new_connection();
     if (channel_info == nullptr) break;
     pthread_reused = true;
@@ -377,6 +388,11 @@ void Per_thread_connection_handler::kill_blocked_pthreads() {
   modify_thread_cache_size(0);
 }
 
+/**
+ * 检查是否 blocked_pthread_count > wake_pthread （有足够的block状态线程用来唤醒） 如有 插入 channel_info 进入 waiting_channel_info_list，并发出 COND_thread_cache 信号量
+ * @param channel_info
+ * @return
+ */
 bool Per_thread_connection_handler::check_idle_thread_and_enqueue_connection(
     Channel_info *channel_info) {
   bool res = true;

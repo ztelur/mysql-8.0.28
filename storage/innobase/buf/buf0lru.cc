@@ -1352,6 +1352,7 @@ we put it to free list to be used.
   * same as iteration 1 but sleep 10ms
 @param[in,out]	buf_pool	buffer pool instance
 @return the free control block, in state BUF_BLOCK_READY_FOR_USE */
+// 从 buffer pool 中获取一个 free 的 block
 buf_block_t *buf_LRU_get_free_block(buf_pool_t *buf_pool) {
   buf_block_t *block = nullptr;
   bool freed = false;
@@ -1364,14 +1365,18 @@ buf_block_t *buf_LRU_get_free_block(buf_pool_t *buf_pool) {
 
   MONITOR_INC(MONITOR_LRU_GET_FREE_SEARCH);
 loop:
+  // 当前函数会检查一些非数据对象，比如AHI, lock 所占用的buf_pool是否太高并发出警告
   buf_LRU_check_size_of_non_data_objects(buf_pool);
 
   /* If there is a block in the free list, take it */
+  // 如果当前有 block 在 free list 中，那么就使用它
   block = buf_LRU_get_free_only(buf_pool);
-
+  // 如果获取到了空闲页面，清零之后就直接使用。否则就需要进行LRU页面淘汰
   if (block != nullptr) {
+    // 里边的逻辑是进行清零
     ut_ad(!block->page.someone_has_io_responsibility());
     ut_ad(buf_pool_from_block(block) == buf_pool);
+    // 使用 memset
     memset(&block->page.zip, 0, sizeof block->page.zip);
 
     if (started_monitor) {
@@ -1385,6 +1390,11 @@ loop:
   MONITOR_INC(MONITOR_LRU_GET_FREE_LOOPS);
 
   freed = false;
+  /**
+   * 这里会重复进行空闲页扫描，如果没有空闲页面，会根据LRU list对页面进行淘汰。
+    这里设置buf_pool->try_LRU_scan是做了一个优化，如果当前用户线程扫描的时候
+    发现没有空闲页面，那么其他用户线程就不需要进行同样的扫描。
+   */
   os_rmb;
   if (buf_pool->try_LRU_scan || n_iterations > 0) {
     /* If no block was in the free list, search from the
@@ -1409,6 +1419,9 @@ loop:
   }
 
   if (n_iterations > 20 && srv_buf_pool_old_size == srv_buf_pool_size) {
+    /**
+     * 如果循环获取空闲页的次数大于20次，系统将发出报警信息
+     */
     ib::warn(ER_IB_MSG_134)
         << "Difficult to find free blocks in the buffer pool"
            " ("
@@ -1443,10 +1456,19 @@ loop:
   }
 
   if (n_iterations > 1) {
+    // 这里每次循环释放空闲页面会间隔10ms
     MONITOR_INC(MONITOR_LRU_GET_FREE_WAITS);
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
+  /**
+   * /* 如果buffer pool里面没有发现可以直接替换的页面（所谓直接替换的页面，
+    是指页面没有被修改， 也没有别的线程进行引用，同时当前页已经被载入buffer pool），
+    注意：上面的页面淘汰过程至少会尝试
+    innodb_lru_scan_depth个页面。如果上面不存在可以淘汰的页面。那么系统将尝试淘汰一个
+    脏页面（可替换页面或者已经被载入buffer pool的脏页面）。
+  */
+   */
   /* No free block was found: try to flush the LRU list.
   This call will flush one page from the LRU and put it on the
   free list. That means that the free block is up for grabs for

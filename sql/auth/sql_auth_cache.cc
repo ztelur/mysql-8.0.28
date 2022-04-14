@@ -1735,12 +1735,13 @@ static bool reload_roles_cache(THD *thd, TABLE_LIST *tablelst) {
     0   ok
     1   Could not initialize grant's
 */
-
+// ACl_USER 对象保存在数组 acl_users 中，每次mysqld启动时，从mysql.user表中读取数据，初始化 acl_users，初始化过程在函数 acl_load 中
+// 将 acl 信息加载到内存中
 bool acl_init(bool dont_read_acl_tables) {
   THD *thd;
   bool return_val;
   DBUG_TRACE;
-
+  // 初始化cache
   init_acl_cache();
 
   acl_cache_initialized = true;
@@ -1786,6 +1787,7 @@ bool acl_init(bool dont_read_acl_tables) {
     will be freed there are global static objects and thus are initialized
     by zeros at startup.
   */
+  // 从数据库中读取
   return_val |= acl_reload(thd, false);
   notify_flush_event(thd);
   /*

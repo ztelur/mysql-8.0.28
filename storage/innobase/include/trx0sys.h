@@ -60,6 +60,7 @@ class MVCC;
 class ReadView;
 
 /** The transaction system */
+// 定义了全局的事务系统，这是一个全局变量
 extern trx_sys_t *trx_sys;
 
 /** Checks if a page address is the trx sys header page.

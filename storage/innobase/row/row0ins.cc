@@ -2305,7 +2305,7 @@ static dberr_t row_ins_index_entry_big_rec_func(trx_t *trx,
 
   DEBUG_SYNC_C_IF_THD(thd, "before_row_ins_extern_latch");
   DEBUG_SYNC_C("before_insertion_of_blob");
-
+  // 1.1
   mtr_start(&mtr);
 
   dict_disable_redo_if_temporary(index->table, &mtr);
@@ -2397,6 +2397,7 @@ and return. don't execute actual insert. */
 #ifdef UNIV_DEBUG
   mtr_t temp_mtr;
   temp_mtr.start();
+  // // 1.2 对index加s锁
   mtr_s_lock(dict_index_get_lock(index), &temp_mtr);
 
   if (btr_height_get(index, &temp_mtr) >= BTR_MAX_NODE_LEVEL &&
@@ -2661,7 +2662,7 @@ static dberr_t row_ins_sorted_clust_index_entry(ulint mode, dict_index_t *index,
       index->last_ins_cur->disable_caching) {
     /* Commit the previous mtr. */
     index->last_ins_cur->release();
-
+    // 2.1 mtr_2 贯穿整条insert语句
     mtr_start(mtr);
     mtr_set_log_mode(mtr, MTR_LOG_NO_REDO);
 
@@ -3137,6 +3138,7 @@ and return. don't execute actual insert. */
     if (!index->last_ins_cur) {
       dict_allocate_mem_intrinsic_cache(index);
     }
+    // 这里进行另外一步操作
     err = row_ins_sorted_clust_index_entry(BTR_MODIFY_LEAF, index, entry, thr);
   } else {
     // 先尝试乐观插入，修改叶子节点 BTR_MODIFY_LEAF
@@ -3334,13 +3336,14 @@ static dberr_t row_ins_index_entry(dict_index_t *index, dtuple_t *entry,
   });
 
   if (index->is_clustered()) {
-    // 插入聚集索引
+    // 插入聚集索引 聚集索引执行这个分支
     return (row_ins_clust_index_entry(index, entry, thr, false));
   } else if (index->is_multi_value()) {
+    // 使用二级索引多个value值时，执行这个分支
     return (
         row_ins_sec_index_multi_value_entry(index, entry, multi_val_pos, thr));
   } else {
-    // 插入二级索引
+    // 插入二级索引 二级索引执行这个分支
     return (row_ins_sec_index_entry(index, entry, thr, false));
   }
 }
@@ -3472,7 +3475,7 @@ dberr_t row_ins_index_entry_set_vals(const dict_index_t *index, dtuple_t *entry,
   }
 
   ut_ad(dtuple_check_typed(node->entry));
-  // 插入索引项
+  // 插入索引项 row_ins_index_entry
   err = row_ins_index_entry(node->index, node->entry, node->ins_multi_val_pos,
                             thr);
 
@@ -3633,6 +3636,7 @@ static inline void row_ins_get_row_from_query_block(
 /** Inserts a row to a table. This is a high-level function used in SQL
  execution graphs.
  @return query thread to run next or NULL */
+ // 使用 SQL 执行图的高level的函数
 que_thr_t *row_ins_step(que_thr_t *thr) /*!< in: query thread */
 {
   ins_node_t *node;
@@ -3644,7 +3648,7 @@ que_thr_t *row_ins_step(que_thr_t *thr) /*!< in: query thread */
   ut_ad(thr);
 
   DEBUG_SYNC_C("innodb_row_ins_step_enter");
-
+  // 获取事务
   trx = thr_get_trx(thr);
 
   trx_start_if_not_started_xa(trx, true);

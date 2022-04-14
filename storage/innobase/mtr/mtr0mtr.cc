@@ -573,6 +573,7 @@ thread_local ut::unordered_set<const mtr_t *> mtr_t::s_my_thread_active_mtrs;
 /** Start a mini-transaction.
 @param sync		true if it is a synchronous mini-transaction
 @param read_only	true if read only mini-transaction */
+// 启动一个 mini-transaction 事务
 void mtr_t::start(bool sync, bool read_only) {
   ut_ad(m_impl.m_state == MTR_STATE_INIT ||
         m_impl.m_state == MTR_STATE_COMMITTED);
@@ -584,11 +585,13 @@ void mtr_t::start(bool sync, bool read_only) {
   m_sync = sync;
 
   m_commit_lsn = 0;
-
+  //初始化mtr.m_impl->m_memo锁管理对象
+  // m_log和m_memo都是mtr_buf_t，以block_t节点m_node域构建的双向链表
   new (&m_impl.m_log) mtr_buf_t();
   new (&m_impl.m_memo) mtr_buf_t();
-
+  // 初始化mtr.m_impl->m_log日志管理对象
   m_impl.m_mtr = this;
+  // 记录所有的数据变更
   m_impl.m_log_mode = MTR_LOG_ALL;
   m_impl.m_inside_ibuf = false;
   m_impl.m_modifications = false;

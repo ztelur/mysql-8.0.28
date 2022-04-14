@@ -436,7 +436,7 @@ bool thd_init_client_charset(THD *thd, uint cs_number) {
      0  success, thd is updated.
      1  error
 */
-
+// 执行相关的客户端权限判断和设置 acl 参数
 static int check_connection(THD *thd) {
   uint connect_errors = 0;
   int auth_rc;
@@ -647,7 +647,7 @@ static int check_connection(THD *thd) {
           thd, AUDIT_EVENT(MYSQL_AUDIT_CONNECTION_PRE_AUTHENTICATE))) {
     return 1;
   }
-
+  // 处理 acl 认证
   auth_rc = acl_authenticate(thd, COM_CONNECT);
 
   if (mysql_audit_notify(thd, AUDIT_EVENT(MYSQL_AUDIT_CONNECTION_CONNECT))) {
@@ -701,7 +701,7 @@ static bool login_connection(THD *thd) {
   /* Use "connect_timeout" value during connection phase */
   thd->get_protocol_classic()->set_read_timeout(connect_timeout);
   thd->get_protocol_classic()->set_write_timeout(connect_timeout);
-
+  // 检查 connection，会调用 get_or_create_user_conn 为 THD 绑定 USER_CONN 对象
   error = check_connection(thd);
   thd->send_statement_status();
 
@@ -884,6 +884,7 @@ bool thd_prepare_connection(THD *thd) {
 
   bool rc;
   lex_start(thd);
+  // 登录 connection
   rc = login_connection(thd);
 
   if (rc) return rc;
