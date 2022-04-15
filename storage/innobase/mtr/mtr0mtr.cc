@@ -510,6 +510,7 @@ bool mtr_t::is_block_dirtied(const buf_block_t *block) {
 struct mtr_write_log_t {
   /** Append a block to the redo log buffer.
   @return whether the appending should continue */
+  // 将 block 以log block的 start_lsn%OS_FILE_LOG_BLOCK_SIZE位置的数据 拷贝到公共log buffer的 start_lsn%log.buf_size位置
   bool operator()(const mtr_buf_t::block_t *block) {
     lsn_t start_lsn;
     lsn_t end_lsn;
@@ -521,7 +522,7 @@ struct mtr_write_log_t {
     }
 
     start_lsn = m_lsn;
-
+    // 将以log block的 start_lsn%OS_FILE_LOG_BLOCK_SIZE位置的数据 拷贝到公共log buffer的 start_lsn%log.buf_size位置
     end_lsn = log_buffer_write(*log_sys, m_handle, block->begin(),
                                block->used(), start_lsn);
 
@@ -550,9 +551,10 @@ struct mtr_write_log_t {
         of log records in block containing m_lsn. */
         && m_handle.start_lsn / OS_FILE_LOG_BLOCK_SIZE !=
                end_lsn / OS_FILE_LOG_BLOCK_SIZE) {
+      // 若mtr日志都写完且 mtr开头和结尾不在同一个log block中，则在新header中设置 LOG_BLOCK_FIRST_REC_GROUP为 end_lsn
       log_buffer_set_first_record_group(*log_sys, m_handle, end_lsn);
     }
-
+    // 每个block拷贝完成后均触发一次Link_buf(并查集)的更新，log.recent_written记录完成拷贝的最大连续日志的lsn
     log_buffer_write_completed(*log_sys, m_handle, start_lsn, end_lsn);
 
     m_lsn = end_lsn;
@@ -852,8 +854,19 @@ void mtr_t::Command::release_all() {
 }
 
 /** Add blocks modified in this mini-transaction to the flush list. */
+// 为了去掉flush_order_mutex，把mtr对应的脏页无序的添加到flush list，在做checkpoint时, 无法保证flush list 上面最头的page lsn是最小的
+/**
+ *  add_dirty_page_to_flush_list    把修改后的page加入flush list，当mtr_memo_slot_t.type为MTR_MEMO_PAGE_X_FIX或MTR_MEMO_PAGE_SX_FIX，
+  |     |           |                             或为MTR_MEMO_BUF_FIX，且mtr_memo_slot_t.object->made_dirty_with_no_latch
+  |     |           v
+  |     |         buf_flush_note_modification(mtr_memo_slot_t.object)
+
+  注意，这是逆向。
+ */
+
 void mtr_t::Command::add_dirty_blocks_to_flush_list(lsn_t start_lsn,
                                                     lsn_t end_lsn) {
+  //
   Add_dirty_blocks_to_flush_list add_to_flush(start_lsn, end_lsn,
                                               m_impl->m_flush_observer);
 
@@ -876,7 +889,7 @@ void mtr_t::Command::execute() {
     mtr_write_log_t write_log;
 
     write_log.m_left_to_write = len;
-    // 在公共log buffer中为日志预留空
+    // 在公共log buffer中为日志预留空 获取 log buffer 的 s 锁，然后预留空间
     auto handle = log_buffer_reserve(*log_sys, len);
 
     write_log.m_handle = handle;
@@ -890,9 +903,10 @@ void mtr_t::Command::execute() {
     log_wait_for_space_in_log_recent_closed(*log_sys, handle.start_lsn);
 
     DEBUG_SYNC_C("mtr_redo_before_add_dirty_blocks");
-
+    // 将mtr锁管理中记录的脏页加入flush list
     add_dirty_blocks_to_flush_list(handle.start_lsn, handle.end_lsn);
-
+    // 将mtr锁管理中记录的脏页处理完后触发一次Link_buf更新，log.recent_closed记录添加到flush list的最大连续日志的lsn
+    // 以log.recent_closed.m_tail的lsn来做checkpoint肯定是安全的
     log_buffer_close(*log_sys, handle);
 
     m_impl->m_mtr->m_commit_lsn = handle.end_lsn;
@@ -903,7 +917,7 @@ void mtr_t::Command::execute() {
     add_dirty_blocks_to_flush_list(0, 0);
   }
 #endif /* !UNIV_HOTBACKUP */
-
+  // 释放所有的锁 释放mtr持有的锁
   release_all();
   release_resources();
 }

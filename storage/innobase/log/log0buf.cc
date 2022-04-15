@@ -509,6 +509,8 @@ static inline sn_t log_buffer_s_lock_enter_reserve(log_t &log, size_t len) {
   if (UNIV_UNLIKELY((start_sn & SN_LOCKED) != 0)) {
     start_sn &= ~SN_LOCKED;
     /* log.sn is locked. Should wait for unlocked. */
+    // log_buffer_s_lock_wait
+    // 若log.sn被SN_LOCKED，则等待log.sn_locked 超过占位前的log.sn
     log_buffer_s_lock_wait(log, start_sn);
   }
 
@@ -530,6 +532,7 @@ static inline sn_t log_buffer_s_lock_enter_reserve(log_t &log, size_t len) {
 static inline void log_buffer_s_lock_exit_close(log_t &log, lsn_t start_lsn,
                                                 lsn_t end_lsn) {
 #ifdef UNIV_PFS_RWLOCK
+  // 对 log.pfs_psi解锁 s-lock
   if (log.pfs_psi != nullptr) {
     if (log.pfs_psi->m_enabled) {
       /* Inform performance schema we are unlocking the lock */
@@ -539,7 +542,7 @@ static inline void log_buffer_s_lock_exit_close(log_t &log, lsn_t start_lsn,
   }
 #endif /* UNIV_PFS_RWLOCK */
   ut_d(rw_lock_remove_debug_info(log.sn_lock_inst, 0, RW_LOCK_S));
-
+  // log.recent_closed.add_link_advance_tail
   log.recent_closed.add_link_advance_tail(start_lsn, end_lsn);
 }
 
@@ -879,7 +882,7 @@ Log_handle log_buffer_reserve(log_t &log, size_t len) {
  *******************************************************/
 
 /** @{ */
-
+// log_buffer_write 以log block的 start_lsn%OS_FILE_LOG_BLOCK_SIZE位置的数据 拷贝到公共log buffer的 start_lsn%log.buf_size位置
 lsn_t log_buffer_write(log_t &log, const Log_handle &handle, const byte *str,
                        size_t str_len, lsn_t start_lsn) {
   ut_ad(rw_lock_own(log.sn_lock_inst, RW_LOCK_S));
@@ -925,6 +928,7 @@ lsn_t log_buffer_write(log_t &log, const Log_handle &handle, const byte *str,
 
     /* Calculate how many free data bytes are available
     within current log block. */
+    // 若日志长度超过log block剩余大小，则要做截断
     const auto left = OS_FILE_LOG_BLOCK_SIZE - LOG_BLOCK_TRL_SIZE - offset;
 
     ut_a(left > 0);
@@ -951,7 +955,7 @@ lsn_t log_buffer_write(log_t &log, const Log_handle &handle, const byte *str,
       there is more to copy. */
 
       len = left;
-
+      // 若log block写满，要增加tail和新的header
       lsn_diff = left + LOG_BLOCK_TRL_SIZE + LOG_BLOCK_HDR_SIZE;
     }
 
@@ -979,7 +983,7 @@ lsn_t log_buffer_write(log_t &log, const Log_handle &handle, const byte *str,
 
       ptr -= log.buf_size;
     }
-
+    // 若公共log buffer被写满，则下次从开头继续写。因为每个mtr的日志在解析时大小就不超过2M，肯定不会超过公共log buffer的大小16M
     if (lsn_diff > left) {
       /* We have crossed boundaries between consecutive log
       blocks. Either we finish in next block, in which case
@@ -994,7 +998,7 @@ lsn_t log_buffer_write(log_t &log, const Log_handle &handle, const byte *str,
       ut_a((uintptr_t(ptr) & ~uintptr_t(LOG_BLOCK_HDR_SIZE)) %
                OS_FILE_LOG_BLOCK_SIZE ==
            0);
-
+      // 在新header中设置 LOG_BLOCK_FIRST_REC_GROUP为0
       log_block_set_first_rec_group(
           reinterpret_cast<byte *>(uintptr_t(ptr) &
                                    ~uintptr_t(LOG_BLOCK_HDR_SIZE)),
@@ -1018,7 +1022,7 @@ lsn_t log_buffer_write(log_t &log, const Log_handle &handle, const byte *str,
 
   return (lsn);
 }
-
+// log_buffer_write_completed 每个block拷贝完成后均触发一次Link_buf(并查集)的更新，log.recent_written记录完成拷贝的最大连续日志的lsn
 void log_buffer_write_completed(log_t &log, const Log_handle &handle,
                                 lsn_t start_lsn, lsn_t end_lsn) {
   ut_ad(rw_lock_own(log.sn_lock_inst, RW_LOCK_S));
@@ -1065,11 +1069,27 @@ void log_buffer_write_completed(log_t &log, const Log_handle &handle,
 
   /* Note that end_lsn will not point to just before footer,
   because we have already validated that end_lsn is valid. */
+  // 在recent_written->m_links的slot中记录当前
+  // 日志的end_lsn，m_tail表示已拷贝到log buffer连续日志的end_lsn
+  /**
+   * log.recent_written.add_link_advance_tail     在recent_written->m_links的slot中记录当前日志的end_lsn，m_tail表示已拷贝到log buffer连续日志的end_lsn
+  |     |           |     |
+  |     |           |     |-> 若m_tail为当前日志的start_lsn，则推进m_tail为当期日志的end_lsn
+  |     |           |     |
+  |     |           |     |-> 否则recent_written->m_links[start_lsn%capacity] = end_lsn，并推进m_tail
+  |     |           |           v
+  |     |           |         log.recent_written.advance_tail_until   等到log.recent_written.m_tail推进到最大lsn
+  |     |           |           |
+  |     |           |           |-> 若recent_written->m_links[m_tail%capacity] > m_tail，则使用cas更改recent_written->m_links[m_tail%capacity] = m_tail 来排他访问
+  |     |           |           |
+  |     |           |           |-> (loop next_position)    推进m_tail为此刻连续的最大lsn，即使没推进到当前日志，其它help线程会帮忙推进
+   */
   log.recent_written.add_link_advance_tail(start_lsn, end_lsn);
 
   /* if someone is waiting for, set the event. (if possible) */
   lsn_t ready_lsn = log_buffer_ready_for_write_lsn(log);
 
+  // 若log.recent_written.m_tail > log.current_ready_waiting_lsn，则os_event_set(log.closer_event)
   if (log.current_ready_waiting_lsn > 0 &&
       log.current_ready_waiting_lsn <= ready_lsn &&
       !os_event_is_set(log.closer_event) &&
@@ -1100,7 +1120,7 @@ void log_wait_for_space_in_log_recent_closed(log_t &log, lsn_t lsn) {
     MONITOR_INC_VALUE(MONITOR_LOG_ON_RECENT_CLOSED_WAIT_LOOPS, wait_loops);
   }
 }
-
+// 将mtr锁管理中记录的脏页处理完后触发一次Link_buf更新
 void log_buffer_close(log_t &log, const Log_handle &handle) {
   const lsn_t start_lsn = handle.start_lsn;
   const lsn_t end_lsn = handle.end_lsn;
@@ -1116,7 +1136,7 @@ void log_buffer_close(log_t &log, const Log_handle &handle) {
   std::atomic_thread_fence(std::memory_order_release);
 
   LOG_SYNC_POINT("log_buffer_write_completed_dpa_before_store");
-
+  // 进行处理
   log_buffer_s_lock_exit_close(log, start_lsn, end_lsn);
 }
 
