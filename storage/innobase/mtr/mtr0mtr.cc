@@ -377,7 +377,7 @@ Add_dirty_blocks_to_flush_list::Add_dirty_blocks_to_flush_list(
     : m_end_lsn(end_lsn), m_start_lsn(start_lsn), m_flush_observer(observer) {
   /* Do nothing */
 }
-
+// 命令模式，事务的命令
 class mtr_t::Command {
  public:
   /** Constructor.
@@ -672,20 +672,22 @@ void mtr_t::Command::release_resources() {
 }
 
 /** Commit a mini-transaction. */
+// 提交一个事务
 void mtr_t::commit() {
   ut_ad(is_active());
   ut_ad(!is_inside_ibuf());
   ut_ad(m_impl.m_magic_n == MTR_MAGIC_N);
+  // 设置事务状态
   m_impl.m_state = MTR_STATE_COMMITTING;
 
   DBUG_EXECUTE_IF("mtr_commit_crash", DBUG_SUICIDE(););
-
+  // 生成对应的 command
   Command cmd(this);
 
   if (m_impl.m_n_log_recs > 0 ||
       (m_impl.m_modifications && m_impl.m_log_mode == MTR_LOG_NO_REDO)) {
     ut_ad(!srv_read_only_mode || m_impl.m_log_mode == MTR_LOG_NO_REDO);
-
+    // 执行 command 将mtr.m_impl->m_log写入公共log buffer，把脏页加入flush list
     cmd.execute();
   } else {
     cmd.release_all();
@@ -771,7 +773,9 @@ void mtr_t::release_page(const void *ptr, mtr_memo_type_t type) {
 
 /** Prepare to write the mini-transaction log to the redo log buffer.
 @return number of bytes to write in finish_write() */
+// 准备将 mini-transaction 的 log 写入到对应的 redo log buffer 中
 ulint mtr_t::Command::prepare_write() {
+  // 若 mtr.m_impl->m_log_mode为 MTR_LOG_NO_REDO或MTR_LOG_NONE，则直接返回
   switch (m_impl->m_log_mode) {
     case MTR_LOG_SHORT_INSERTS:
       ut_ad(0);
@@ -807,7 +811,10 @@ ulint mtr_t::Command::prepare_write() {
   tablespace since the latest checkpoint. */
 
   ut_ad(n_recs == m_impl->m_n_log_recs);
-
+  /**
+   * 若 mtr.m_impl->m_n_log_recs==1，则 m_log.front()->begin()|=MLOG_SINGLE_REC_FLAG，在日志头Type字段中标识，
+  |
+   */
   if (n_recs <= 1) {
     ut_ad(n_recs == 1);
 
@@ -820,7 +827,7 @@ ulint mtr_t::Command::prepare_write() {
     /* Because this mini-transaction comprises
     multiple log records, append MLOG_MULTI_REC_END
     at the end. */
-
+    // 否则 m_log->push(MLOG_MULTI_REC_END)，在日志结尾附加1
     mlog_catenate_ulint(&m_impl->m_log, MLOG_MULTI_REC_END, MLOG_1BYTE);
     ++len;
   }
@@ -857,17 +864,19 @@ void mtr_t::Command::add_dirty_blocks_to_flush_list(lsn_t start_lsn,
 
 /** Write the redo log record, add dirty pages to the flush list and release
 the resources. */
+// 将mtr.m_impl->m_log写入公共log buffer，把脏页加入flush list
 void mtr_t::Command::execute() {
   ut_ad(m_impl->m_log_mode != MTR_LOG_NONE);
 
 #ifndef UNIV_HOTBACKUP
+  // 判断需要写入的量
   ulint len = prepare_write();
 
   if (len > 0) {
     mtr_write_log_t write_log;
 
     write_log.m_left_to_write = len;
-
+    // 在公共log buffer中为日志预留空
     auto handle = log_buffer_reserve(*log_sys, len);
 
     write_log.m_handle = handle;

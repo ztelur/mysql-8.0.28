@@ -487,8 +487,10 @@ The corresponding unlock operation is adding link to log.recent_closed.
 @param[in,out] log     redo log
 @param[in]     len     number of data bytes to reserve for write
 @return start sn of reserved */
+// 获取 log buffer 的 s 锁，然后预留空间
 static inline sn_t log_buffer_s_lock_enter_reserve(log_t &log, size_t len) {
 #ifdef UNIV_PFS_RWLOCK
+  // 对 log.pfs_psi加 s-lock
   PSI_rwlock_locker *locker = nullptr;
   PSI_rwlock_locker_state state;
   if (log.pfs_psi != nullptr) {
@@ -502,6 +504,7 @@ static inline sn_t log_buffer_s_lock_enter_reserve(log_t &log, size_t len) {
 #endif /* UNIV_PFS_RWLOCK */
 
   /* Reserve space in sequence of data bytes: */
+  // 在公共的log buffer中占位
   sn_t start_sn = log.sn.fetch_add(len);
   if (UNIV_UNLIKELY((start_sn & SN_LOCKED) != 0)) {
     start_sn &= ~SN_LOCKED;
@@ -812,7 +815,7 @@ void log_wait_for_space_in_log_buf(log_t &log, sn_t end_sn) {
   ut_a(end_sn + OS_FILE_LOG_BLOCK_SIZE <=
        log_translate_lsn_to_sn(log.write_lsn.load()) + buf_size_sn);
 }
-
+// mini-transaction 提交时进行处理，
 Log_handle log_buffer_reserve(log_t &log, size_t len) {
   Log_handle handle;
 
@@ -834,6 +837,7 @@ Log_handle log_buffer_reserve(log_t &log, size_t len) {
   ut_a(len > 0);
 
   /* Reserve space in sequence of data bytes: */
+  // 为数据预留空间
   const sn_t start_sn = log_buffer_s_lock_enter_reserve(log, len);
 
   /* Ensure that redo log has been initialized properly. */

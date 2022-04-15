@@ -371,6 +371,7 @@ Read more about redo log details:
 ut::aligned_pointer<log_t, ut::INNODB_CACHE_LINE_SIZE> *log_sys_object;
 
 /** Redo log system (singleton). */
+// 单例， redo log 系统
 log_t *log_sys;
 
 #ifdef UNIV_PFS_MEMORY

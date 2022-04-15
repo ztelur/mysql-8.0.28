@@ -130,6 +130,7 @@ struct Log_handle {
 
 /** Redo log - single data structure with state of the redo log system.
 In future, one could consider splitting this to multiple data structures. */
+// redo log 的结构体
 struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
   /**************************************************/ /**
 
