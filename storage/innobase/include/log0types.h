@@ -182,14 +182,17 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
       operations will be aligned to sector size, which is required e.g. on
       Windows when doing unbuffered file access.
       Protected by: locking sn not to add. */
+      // Log buffer起始位置指针
       ut::aligned_array_pointer<byte, OS_FILE_LOG_BLOCK_SIZE> buf;
 
   /** Size of the log buffer expressed in number of data bytes,
   that is excluding bytes for headers and footers of log blocks. */
+  // log buffer 的大小
   atomic_sn_t buf_size_sn;
 
   /** Size of the log buffer expressed in number of total bytes,
   that is including bytes for headers and footers of log blocks. */
+  // Log buffer 大小，受参数innodb_log_buffer_size控制，但可能会自动extend
   size_t buf_size;
 
   alignas(ut::INNODB_CACHE_LINE_SIZE)
@@ -240,6 +243,7 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
   /*
   @see @ref subsect_redo_log_write_lsn */
   MY_COMPILER_DIAGNOSTIC_POP()
+  // 最近一次完成写入到文件的LSN
   alignas(ut::INNODB_CACHE_LINE_SIZE) atomic_lsn_t write_lsn;
 
   alignas(ut::INNODB_CACHE_LINE_SIZE)
@@ -289,6 +293,7 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
       values (lsn belonging to the same log block). Note that false
       wake-ups are possible, in which case user threads simply retry
       waiting. */
+      /// 若当前有正在进行的fsync，并且本次请求也是fsync操作，则需要等待上次fsync操作完成
       os_event_t *flush_events;
 
   /** Number of entries in the array with events. */
@@ -303,6 +308,7 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
   alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** Up to this lsn data has been flushed to disk (fsynced). */
+      // 最近一次完成fsync到文件的LSN
       atomic_lsn_t flushed_to_disk_lsn;
 
   /** Padding after the frequently updated flushed_to_disk_lsn. */
@@ -686,6 +692,7 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
   /**
   @see @ref subsect_redo_log_last_checkpoint_lsn */
   MY_COMPILER_DIAGNOSTIC_POP()
+  // 最近一次checkpoint时的lsn，每完成一次checkpoint，将next_checkpoint_lsn的值赋给last_checkpoint_lsn
   atomic_lsn_t last_checkpoint_lsn;
 
   /** Next checkpoint number.
@@ -693,6 +700,7 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
   Read by: log_writer (under writer_mutex)
   Updated by: log_checkpointer (under both mutexes)
   Protected by: checkpoint_mutex + writer_mutex. */
+  // 每完成一次checkpoint递增该值
   std::atomic<checkpoint_no_t> next_checkpoint_no;
 
   /** Latest checkpoint wall time.
@@ -702,6 +710,7 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
   /** Aligned buffer used for writing a checkpoint header. It is aligned
   similarly to log.buf.
   Used by (private): log_checkpointer, recovery code */
+  // Checkpoint信息缓冲区，每次checkpoint前，先写该buf，再将buf刷到磁盘
   ut::aligned_array_pointer<byte, OS_FILE_LOG_BLOCK_SIZE> checkpoint_buf;
 
   /** @} */
@@ -722,18 +731,22 @@ struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
   /** Capacity of log files excluding headers of the log files.
   If the checkpoint age exceeds this, it is a serious error,
   because in such case we have already overwritten redo log. */
+  // 表示当前日志文件的真实容量
   lsn_t lsn_real_capacity;
 
   /** When the oldest dirty page age exceeds this value, we start
   an asynchronous preflush of dirty pages. */
+  // 异步 preflush dirty page 点
   lsn_t max_modified_age_async;
 
   /** When the oldest dirty page age exceeds this value, we start
   a synchronous flush of dirty pages. */
+  // 同步 preflush dirty page 点
   lsn_t max_modified_age_sync;
 
   /** When checkpoint age exceeds this value, we write checkpoints
   if lag between oldest_lsn and checkpoint_lsn exceeds max_checkpoint_lag. */
+  // 异步 checkpoint 点
   lsn_t max_checkpoint_age_async;
 
   /** @} */

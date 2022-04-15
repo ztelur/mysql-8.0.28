@@ -217,12 +217,18 @@ struct mtr_t {
 
     /** Count of how many page initial log records have been
     written to the mtr log */
-    // log 记录数
+    // log 记录数 该mtr log记录个数
     ib_uint32_t m_n_log_recs;
 
     /** specifies which operations should be logged; default
     value MTR_LOG_ALL */
     // 日志模式，默认MTR_LOG_ALL
+    /**
+     * Mtr的工作模式，包括四种： MTR_LOG_ALL：默认模式，记录所有会修改磁盘数据的操作；
+     * MTR_LOG_NONE：不记录redo，脏页也不放到flush list上；MTR_LOG_NO_REDO：不记录redo，但脏页放到flush list上；
+     * MTR_LOG_SHORT_INSERTS：插入记录操作REDO，在将记录从一个page拷贝到另外一个新建的page时用到，此时忽略写索引信息到redo log中。
+     * （参阅函数page_cur_insert_rec_write_log）
+     */
     mtr_log_t m_log_mode;
 
     /** State of the transaction */

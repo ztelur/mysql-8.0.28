@@ -372,6 +372,10 @@ ut::aligned_pointer<log_t, ut::INNODB_CACHE_LINE_SIZE> *log_sys_object;
 
 /** Redo log system (singleton). */
 // 单例， redo log 系统
+/**
+ * InnoDB日志系统的中枢及核心对象，控制着日志的拷贝、写入、checkpoint等核心功能。它同时也是大写入负载场景下的热点模块，是连接InnoDB日志文件及log buffer的枢纽
+ *
+ */
 log_t *log_sys;
 
 #ifdef UNIV_PFS_MEMORY

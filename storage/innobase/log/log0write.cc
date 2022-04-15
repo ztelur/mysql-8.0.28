@@ -1038,7 +1038,7 @@ static Wait_stats log_self_write_up_to(log_t &log, lsn_t end_lsn,
 
   return (Wait_stats{waits});
 }
-
+// 真正将数据写入到持久化内存中
 Wait_stats log_write_up_to(log_t &log, lsn_t end_lsn, bool flush_to_disk) {
   ut_a(!srv_read_only_mode);
 
